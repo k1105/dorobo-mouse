@@ -1,4 +1,5 @@
-import type { MapData, Rect } from '../game/world';
+import type { MapData } from '../game/world';
+import { castRay } from '../game/world';
 
 const CANVAS_W = 480;
 const RAYS_PER_CAM = 72;
@@ -6,30 +7,37 @@ const RAYS_PER_CAM = 72;
 /**
  * 猫チーム用のカメラマップ。店内レイアウトと各カメラの視野（FOV）を俯瞰で表示する。
  * 視野は棚・壁で遮蔽された実効範囲を2Dレイキャストで求めて扇形に描く。
- * 赤く塗られていない床が「死角」。レイアウトは静的なので初期化時に1度だけ描画する。
+ * 赤く塗られていない床が「死角」。デフォルトは非表示で、Mキーで画面中央にモーダル表示する。
  */
 export class CamMapView {
   private root: HTMLDivElement;
 
   constructor(parent: HTMLElement, data: MapData) {
     this.root = document.createElement('div');
-    this.root.className = 'cam-map';
+    this.root.className = 'cam-map-modal hidden';
     this.root.innerHTML = `
-      <div class="cam-map-head">
-        <span>📷 カメラマップ</span>
-        <span class="cam-map-hint">赤=視野 / 無色=死角 (M)</span>
+      <div class="cam-map-panel">
+        <div class="cam-map-head">
+          <span>📷 カメラマップ</span>
+          <span class="cam-map-hint">赤=視野 / 無色=死角</span>
+          <button class="btn" id="cam-map-close">閉じる (M)</button>
+        </div>
       </div>
     `;
+    const panel = this.root.querySelector<HTMLDivElement>('.cam-map-panel')!;
     const canvas = document.createElement('canvas');
-    this.root.appendChild(canvas);
-    this.root.querySelector<HTMLDivElement>('.cam-map-head')!.onclick = () =>
-      this.toggle();
+    panel.appendChild(canvas);
+    this.root.querySelector<HTMLButtonElement>('#cam-map-close')!.onclick = () => this.toggle();
+    // 背景クリックでも閉じる（パネル内クリックは無視）
+    this.root.onclick = (e) => {
+      if (e.target === this.root) this.toggle();
+    };
     parent.appendChild(this.root);
     this.draw(canvas, data);
   }
 
   toggle(): void {
-    this.root.classList.toggle('collapsed');
+    this.root.classList.toggle('hidden');
   }
 
   private draw(canvas: HTMLCanvasElement, data: MapData): void {
@@ -138,41 +146,4 @@ export class CamMapView {
   dispose(): void {
     this.root.remove();
   }
-}
-
-/** 2Dレイと矩形群の最近傍交点までの距離（なければmaxDist） */
-function castRay(
-  px: number,
-  pz: number,
-  dx: number,
-  dz: number,
-  maxDist: number,
-  rects: Rect[],
-): number {
-  let best = maxDist;
-  for (const r of rects) {
-    // slab法によるレイ-AABB交差
-    let tmin = -Infinity;
-    let tmax = Infinity;
-    if (Math.abs(dx) < 1e-9) {
-      if (px < r.minX || px > r.maxX) continue;
-    } else {
-      const t1 = (r.minX - px) / dx;
-      const t2 = (r.maxX - px) / dx;
-      tmin = Math.max(tmin, Math.min(t1, t2));
-      tmax = Math.min(tmax, Math.max(t1, t2));
-    }
-    if (Math.abs(dz) < 1e-9) {
-      if (pz < r.minZ || pz > r.maxZ) continue;
-    } else {
-      const t1 = (r.minZ - pz) / dz;
-      const t2 = (r.maxZ - pz) / dz;
-      tmin = Math.max(tmin, Math.min(t1, t2));
-      tmax = Math.min(tmax, Math.max(t1, t2));
-    }
-    if (tmax >= tmin && tmax > 0 && tmin < best) {
-      best = Math.max(0, tmin);
-    }
-  }
-  return best;
 }

@@ -3,9 +3,9 @@ import type { PhaseState, PlayerInfo, Role } from '../types';
 import { ROLE_LABELS } from '../types';
 import { CONFIG } from '../config';
 
-const ROLES: Role[] = ['mouse1', 'mouse2', 'catSeeker', 'catCamera'];
+const ROLES: Role[] = ['a1', 'a2', 'b1', 'b2'];
 
-/** ロビー画面（部屋への参加・役割選択・ゲーム開始） */
+/** ロビー画面（部屋への参加・チーム選択・ゲーム開始） */
 export class Lobby {
   private root: HTMLDivElement;
   private net: NetAdapter;
@@ -35,8 +35,10 @@ export class Lobby {
         <h1>🐭 ドロボーマウス 🐱</h1>
         <p class="mode-badge">${modeLabel}</p>
         <p class="lobby-desc">
-          ネズミはNPCに紛れて商品を盗み、出口から脱出したら勝ち。<br>
-          猫はカメラ監視と鬼のペアでネズミを見つけてキャッチしたら勝ち。
+          2チームに分かれて${CONFIG.roundTimeSec}秒×2ラウンドの攻守戦。<br>
+          ネズミ側はNPCに紛れて商品を盗み、出口から持ち出すと1ポイント。<br>
+          猫側は監視カメラ越しに怪しいネズミをクリックしてダウト。<br>
+          合計ポイントの多いチームの勝ち。
         </p>
         <label>名前 <input id="in-name" maxlength="12" placeholder="なまえ" /></label>
         <label>部屋コード <input id="in-room" maxlength="8" placeholder="ABCD" /></label>
@@ -104,12 +106,14 @@ export class Lobby {
     const slots = ROLES.map((role) => {
       const owner = Object.entries(this.players).find(([, p]) => p.role === role);
       const mine = owner?.[0] === pid;
-      const cls = `role-slot ${role.startsWith('mouse') ? 'team-mouse' : 'team-cat'} ${
+      const cls = `role-slot ${role.startsWith('a') ? 'team-a' : 'team-b'} ${
         mine ? 'mine' : ''
       } ${owner && !mine ? 'taken' : ''}`;
+      const hint = role.startsWith('a') ? '前半:🐭ネズミ / 後半:🎥猫' : '前半:🎥猫 / 後半:🐭ネズミ';
       return `
         <button class="${cls}" data-role="${role}" ${owner && !mine ? 'disabled' : ''}>
           <span class="role-name">${ROLE_LABELS[role]}</span>
+          <span class="role-hint">${hint}</span>
           <span class="role-owner">${owner ? owner[1].name : '空き'}</span>
         </button>
       `;
@@ -121,10 +125,10 @@ export class Lobby {
     this.root.innerHTML = `
       <div class="lobby-panel wide">
         <h1>部屋: ${this.room}</h1>
-        <p class="lobby-desc">役割を選んでください（クリックで選択・変更）</p>
+        <p class="lobby-desc">チームの枠を選んでください（クリックで選択・変更）</p>
         <div class="role-grid">${slots}</div>
         <p class="lobby-note">
-          ${filledCount < 4 ? '⚠️ 4人未満でも開始できます（動作確認用）' : '✅ 全役割が埋まりました'}
+          ${filledCount < 4 ? '⚠️ 4人未満でも開始できます（動作確認用）' : '✅ 全枠が埋まりました'}
         </p>
         ${
           inGame
@@ -136,12 +140,13 @@ export class Lobby {
               : '<p class="lobby-note">ホストの開始を待っています…</p>'
         }
         <div class="controls-help">
-          <h3>操作方法</h3>
-          <p>🐭 ネズミ / 🐱 鬼: WASD or 矢印キーで移動</p>
-          <p>🐱 鬼: スペースキーでキャッチ（NPCを間違えると${CONFIG.catchPenaltySec}秒硬直）</p>
-          <p>🎥 カメラ監視: クリック or ←→/1〜9キーでカメラ切替（全12台）、Gでグリッド⇔単一表示、アラートボタンで鬼に通知</p>
-          <p>🐱 猫チーム: Mキーでカメラマップ（視野と死角の俯瞰図）の表示切替</p>
-          <p>🐭 お題の棚の光る場所に${CONFIG.stealTimeSec}秒とどまると盗み成功 → 出口(緑ゲート)から脱出</p>
+          <h3>ルールと操作方法</h3>
+          <p>⏱ ${CONFIG.roundTimeSec}秒×2ラウンド。前半はチームAがネズミ（攻撃）、チームBが猫（監視カメラ）。後半で攻守交代</p>
+          <p>🐭 ネズミ: WASD or 矢印キーで移動。お題の棚の光る場所に${CONFIG.stealTimeSec}秒とどまると盗み成功（その間、体が左右に揺れて目立つ！）→ 出口(緑ゲート)から持ち出すと1ポイント。持ち出した後はカメラの死角にリスポーンして何度でも狙える</p>
+          <p>🎥 猫: 店内カメラ12台をボタン or 数字キーでオンライン⇔オフライン切替（同時${CONFIG.maxViewCams}台まで）。映像内の怪しいネズミをクリックでダウト（1ラウンド各${CONFIG.doubtsPerRound}回まで）。的中でそのラウンド即終了、NPCなら空振り</p>
+          <p>💡 オンラインのカメラは球体が赤く発光し、視野に入っている床が明るくなる（ネズミからも「みられている場所」が分かる）</p>
+          <p>🐱 猫: Mキーでカメラマップ（視野と死角の俯瞰図）をモーダル表示</p>
+          <p>🏆 2ラウンドの合計ポイントが多いチームの勝ち</p>
         </div>
       </div>
     `;
@@ -155,11 +160,13 @@ export class Lobby {
       };
     });
     this.root.querySelector<HTMLButtonElement>('#btn-start')?.addEventListener('click', () => {
-      // 前ラウンドの残骸を消してから開始
+      // 前の試合の残骸を消してから開始
       this.net.remove(`rooms/${this.room}/events`);
       this.net.remove(`rooms/${this.room}/pos`);
+      this.net.remove(`rooms/${this.room}/cams`);
       this.net.set(`rooms/${this.room}/phase`, {
         phase: 'playing',
+        round: 1,
         startAt: Date.now() + CONFIG.countdownSec * 1000,
         seed: Math.floor(Math.random() * 2 ** 31),
       } satisfies PhaseState);

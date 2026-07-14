@@ -56,6 +56,12 @@ export interface World {
   targetOrder: number[];
   cctvCams: THREE.PerspectiveCamera[];
   camPositions: THREE.Vector3[];
+  /** ポール上部の球体。オンライン時に発光させる */
+  camBalls: THREE.Mesh[];
+  /** カメラ視野の床ハイライト。オンライン時に表示する */
+  camFovMeshes: THREE.Mesh[];
+  /** 全カメラの死角になっているリスポーン地点（万引き後に戻る場所） */
+  blindSpawn: { x: number; z: number };
   bounds: Rect;
   nav: NavGrid;
   mapData: MapData;
@@ -291,12 +297,12 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
     mulberry32(seed ^ 0x7a26e7),
   );
 
-  // 防犯カメラ12台。赤い球で見える化
+  // 防犯カメラ12台。赤い球で見える化（球はオンライン時に発光させるため個別マテリアル）
   const cctvCams: THREE.PerspectiveCamera[] = [];
   const camPositions: THREE.Vector3[] = [];
   const camInfos: CamInfo[] = [];
+  const camBalls: THREE.Mesh[] = [];
   const camBallGeo = new THREE.SphereGeometry(0.35, 16, 12);
-  const camBallMat = new THREE.MeshStandardMaterial({ color: COLORS.camera });
   const poleMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
   CAM_DEFS.forEach((def, i) => {
     const pos = new THREE.Vector3(def.x, CAM_Y, def.z);
@@ -313,12 +319,45 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
       hfovDeg: horizontalFovDeg(72, 16 / 9),
       range: def.range ?? CAM_RANGE,
     });
-    const ball = new THREE.Mesh(camBallGeo, camBallMat);
+    const ball = new THREE.Mesh(
+      camBallGeo,
+      new THREE.MeshStandardMaterial({ color: COLORS.camera }),
+    );
     ball.position.copy(pos);
     scene.add(ball);
+    camBalls.push(ball);
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, CAM_Y, 8), poleMat);
     pole.position.set(def.x, CAM_Y / 2, def.z);
     scene.add(pole);
+  });
+
+  // オンラインのカメラが「見ている」床の範囲を明るくするハイライト（遮蔽考慮の扇形）
+  const camFovMeshes: THREE.Mesh[] = [];
+  const FOV_RAYS = 72;
+  camInfos.forEach((cam, i) => {
+    const half = ((cam.hfovDeg / 2) * Math.PI) / 180;
+    const shape = new THREE.Shape();
+    shape.moveTo(cam.x, -cam.z); // 床(rotation.x=-π/2)ではローカルy→ワールド-z
+    for (let r = 0; r <= FOV_RAYS; r++) {
+      const a = cam.angle - half + (2 * half * r) / FOV_RAYS;
+      const d = castRay(cam.x, cam.z, Math.cos(a), Math.sin(a), cam.range, occluders);
+      shape.lineTo(cam.x + Math.cos(a) * d, -(cam.z + Math.sin(a) * d));
+    }
+    const mesh = new THREE.Mesh(
+      new THREE.ShapeGeometry(shape),
+      new THREE.MeshBasicMaterial({
+        color: 0xfff2b0,
+        transparent: true,
+        opacity: 0.13,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.y = 0.02 + i * 0.002; // 重なりのz-fighting回避
+    mesh.visible = false;
+    scene.add(mesh);
+    camFovMeshes.push(mesh);
   });
 
   const bounds: Rect = {
@@ -327,6 +366,9 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
     minZ: -FLOOR_HALF_Z - 1.0, // 出口の分だけ上に抜けられる
     maxZ: FLOOR_HALF_Z - 0.6,
   };
+
+  // 全カメラの死角になるリスポーン地点を探す（下側=出口の反対側を優先）
+  const blindSpawn = findBlindSpawn(camInfos, occluders, obstacles, bounds);
 
   // NPC用歩行グリッド。出口前だけ除外してNPCがゲートにたまらないようにする
   const navObstacles = obstacles.concat([
@@ -359,6 +401,9 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
     targetOrder,
     cctvCams,
     camPositions,
+    camBalls,
+    camFovMeshes,
+    blindSpawn,
     bounds,
     nav,
     mapData,
@@ -366,13 +411,94 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
   };
 }
 
-/** キャラクター用カプセルを作る（ネズミ/NPCは同一見た目、猫は大きめ） */
-export function makeCapsule(kind: 'mouse' | 'cat'): THREE.Mesh {
-  const radius = kind === 'cat' ? 0.45 : 0.35;
-  const height = kind === 'cat' ? 0.9 : 0.7;
+/** 点がいずれかのカメラの視野内（画角・距離・遮蔽を考慮）にあるか */
+function isSeenByCams(x: number, z: number, cams: CamInfo[], occluders: Rect[]): boolean {
+  for (const cam of cams) {
+    const dx = x - cam.x;
+    const dz = z - cam.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist > cam.range || dist < 0.01) continue;
+    const half = ((cam.hfovDeg / 2) * Math.PI) / 180;
+    let diff = Math.abs(Math.atan2(dz, dx) - cam.angle);
+    if (diff > Math.PI) diff = Math.PI * 2 - diff;
+    if (diff > half) continue;
+    const d = castRay(cam.x, cam.z, dx / dist, dz / dist, cam.range, occluders);
+    if (d >= dist - 0.05) return true;
+  }
+  return false;
+}
+
+/**
+ * 全カメラの死角になる歩行可能な地点を1mグリッドで探す。
+ * 出口から遠い下側（z大）→中央寄りの順で優先する。見つからなければ従来のスポーン位置。
+ */
+function findBlindSpawn(
+  cams: CamInfo[],
+  occluders: Rect[],
+  obstacles: Rect[],
+  bounds: Rect,
+): { x: number; z: number } {
+  const r = 0.5;
+  const collides = (x: number, z: number) =>
+    obstacles.some((o) => x + r > o.minX && x - r < o.maxX && z + r > o.minZ && z - r < o.maxZ);
+  const candidates: { x: number; z: number }[] = [];
+  for (let z = Math.floor(bounds.maxZ); z >= Math.ceil(-FLOOR_HALF_Z + 1); z--) {
+    for (let x = Math.ceil(bounds.minX); x <= Math.floor(bounds.maxX); x++) {
+      if (collides(x, z)) continue;
+      if (isSeenByCams(x, z, cams, occluders)) continue;
+      candidates.push({ x, z });
+    }
+    if (candidates.length > 0) break; // 一番下側の行から採用
+  }
+  if (candidates.length === 0) return { x: 7.5, z: 10.5 };
+  candidates.sort((a, b) => Math.abs(a.x) - Math.abs(b.x));
+  return candidates[0];
+}
+
+/** 2Dレイと矩形群の最近傍交点までの距離（なければmaxDist） */
+export function castRay(
+  px: number,
+  pz: number,
+  dx: number,
+  dz: number,
+  maxDist: number,
+  rects: Rect[],
+): number {
+  let best = maxDist;
+  for (const r of rects) {
+    // slab法によるレイ-AABB交差
+    let tmin = -Infinity;
+    let tmax = Infinity;
+    if (Math.abs(dx) < 1e-9) {
+      if (px < r.minX || px > r.maxX) continue;
+    } else {
+      const t1 = (r.minX - px) / dx;
+      const t2 = (r.maxX - px) / dx;
+      tmin = Math.max(tmin, Math.min(t1, t2));
+      tmax = Math.min(tmax, Math.max(t1, t2));
+    }
+    if (Math.abs(dz) < 1e-9) {
+      if (pz < r.minZ || pz > r.maxZ) continue;
+    } else {
+      const t1 = (r.minZ - pz) / dz;
+      const t2 = (r.maxZ - pz) / dz;
+      tmin = Math.max(tmin, Math.min(t1, t2));
+      tmax = Math.min(tmax, Math.max(t1, t2));
+    }
+    if (tmax >= tmin && tmax > 0 && tmin < best) {
+      best = Math.max(0, tmin);
+    }
+  }
+  return best;
+}
+
+/** ネズミ用カプセルを作る（プレイヤーとNPCは同一見た目） */
+export function makeCapsule(): THREE.Mesh {
+  const radius = 0.35;
+  const height = 0.7;
   const mesh = new THREE.Mesh(
     new THREE.CapsuleGeometry(radius, height, 6, 16),
-    new THREE.MeshStandardMaterial({ color: kind === 'cat' ? COLORS.cat : COLORS.mouse }),
+    new THREE.MeshStandardMaterial({ color: COLORS.mouse }),
   );
   mesh.position.y = radius + height / 2;
   return mesh;

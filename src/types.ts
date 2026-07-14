@@ -1,15 +1,29 @@
-export type Role = 'mouse1' | 'mouse2' | 'catSeeker' | 'catCamera' | 'none';
+export type Role = 'a1' | 'a2' | 'b1' | 'b2' | 'none';
+export type Team = 'A' | 'B';
+export type Round = 1 | 2;
 
 export const ROLE_LABELS: Record<Role, string> = {
-  mouse1: 'ネズミ 1',
-  mouse2: 'ネズミ 2',
-  catSeeker: '猫（鬼）',
-  catCamera: '猫（カメラ監視）',
+  a1: 'チームA - 1',
+  a2: 'チームA - 2',
+  b1: 'チームB - 1',
+  b2: 'チームB - 2',
   none: '未選択',
 };
 
-export function isMouse(role: Role): boolean {
-  return role === 'mouse1' || role === 'mouse2';
+export function teamOf(role: Role): Team | null {
+  if (role === 'a1' || role === 'a2') return 'A';
+  if (role === 'b1' || role === 'b2') return 'B';
+  return null;
+}
+
+/** そのラウンドでネズミ（攻撃側）になるチーム。前半=A、後半=B */
+export function miceTeamOf(round: Round): Team {
+  return round === 1 ? 'A' : 'B';
+}
+
+/** roleがそのラウンドでネズミかどうか */
+export function isMouseInRound(role: Role, round: Round): boolean {
+  return teamOf(role) === miceTeamOf(round);
 }
 
 export interface PlayerInfo {
@@ -22,8 +36,13 @@ export interface PhaseState {
   phase: 'lobby' | 'playing' | 'ended';
   startAt?: number;
   seed?: number;
-  winner?: 'mice' | 'cats';
+  round?: Round;
+  /** 前ラウンドの終了理由（ラウンド開始時のバナー表示用） */
+  note?: string;
+  winner?: Team | 'draw';
   reason?: string;
+  scoreA?: number;
+  scoreB?: number;
 }
 
 export interface PosMsg {
@@ -34,8 +53,7 @@ export interface PosMsg {
 }
 
 export type GameEvent =
-  | { type: 'steal'; by: string; spotIdx: number; at: number }
-  | { type: 'alert'; by: string; camId: number; at: number }
-  | { type: 'miss'; by: string; npcIdx: number; at: number }
-  | { type: 'caught'; by: string; mouseId: string; at: number }
-  | { type: 'escape'; by: string; at: number };
+  | { type: 'steal'; by: string; spotIdx: number; round: Round; at: number }
+  | { type: 'escape'; by: string; round: Round; at: number }
+  | { type: 'miss'; by: string; npcIdx: number; round: Round; at: number }
+  | { type: 'caught'; by: string; mouseId: string; round: Round; at: number };

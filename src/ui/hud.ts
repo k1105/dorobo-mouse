@@ -1,11 +1,12 @@
-import type { Role } from '../types';
-import { ROLE_LABELS } from '../types';
+import type { Team } from '../types';
 
 /** ゲーム中のHUD（DOMオーバーレイ） */
 export class Hud {
   private root: HTMLDivElement;
+  private roleEl: HTMLSpanElement;
   private timerEl: HTMLSpanElement;
-  private stealsEl: HTMLSpanElement;
+  private scoreEl: HTMLSpanElement;
+  private infoEl: HTMLSpanElement;
   private targetEl: HTMLDivElement;
   private progressWrap: HTMLDivElement;
   private progressBar: HTMLDivElement;
@@ -13,14 +14,15 @@ export class Hud {
   private centerEl: HTMLDivElement;
   private endEl: HTMLDivElement | null = null;
 
-  constructor(parent: HTMLElement, role: Role) {
+  constructor(parent: HTMLElement, roleLabel: string) {
     this.root = document.createElement('div');
     this.root.className = 'hud';
     this.root.innerHTML = `
       <div class="hud-top">
-        <span class="hud-role">${ROLE_LABELS[role]}</span>
+        <span class="hud-role"></span>
         <span class="hud-timer">--:--</span>
-        <span class="hud-steals">盗み: 0</span>
+        <span class="hud-score"></span>
+        <span class="hud-info"></span>
       </div>
       <div class="hud-target hidden"></div>
       <div class="hud-progress hidden"><div class="hud-progress-bar"></div><span class="hud-progress-label">盗み中…</span></div>
@@ -28,13 +30,16 @@ export class Hud {
       <div class="hud-center"></div>
     `;
     parent.appendChild(this.root);
+    this.roleEl = this.root.querySelector('.hud-role')!;
     this.timerEl = this.root.querySelector('.hud-timer')!;
-    this.stealsEl = this.root.querySelector('.hud-steals')!;
+    this.scoreEl = this.root.querySelector('.hud-score')!;
+    this.infoEl = this.root.querySelector('.hud-info')!;
     this.targetEl = this.root.querySelector('.hud-target')!;
     this.progressWrap = this.root.querySelector('.hud-progress')!;
     this.progressBar = this.root.querySelector('.hud-progress-bar')!;
     this.bannerWrap = this.root.querySelector('.hud-banners')!;
     this.centerEl = this.root.querySelector('.hud-center')!;
+    this.roleEl.textContent = roleLabel;
   }
 
   setTimer(remainSec: number): void {
@@ -42,11 +47,17 @@ export class Hud {
     const mm = String(Math.floor(s / 60)).padStart(2, '0');
     const ss = String(s % 60).padStart(2, '0');
     this.timerEl.textContent = `${mm}:${ss}`;
-    this.timerEl.classList.toggle('urgent', s <= 30);
+    this.timerEl.classList.toggle('urgent', s <= 10);
   }
 
-  setSteals(count: number, carrying: number): void {
-    this.stealsEl.textContent = `チーム盗み: ${count} / 所持: ${carrying}`;
+  /** ラウンドとチームスコアの表示 */
+  setScore(round: number, scoreA: number, scoreB: number): void {
+    this.scoreEl.textContent = `${round === 1 ? '前半' : '後半'}  A ${scoreA} - ${scoreB} B`;
+  }
+
+  /** 役割ごとの補助情報（ネズミ: 所持数 / 猫: ダウト残数） */
+  setInfo(text: string): void {
+    this.infoEl.textContent = text;
   }
 
   /** ネズミ専用: 現在のお題を表示 */
@@ -78,19 +89,26 @@ export class Hud {
     setTimeout(() => el.remove(), 5000);
   }
 
-  /** 画面中央の大きい文字（カウントダウン・硬直表示など）。空文字で消す */
+  /** 画面中央の大きい文字（カウントダウンなど）。空文字で消す */
   setCenter(text: string): void {
     this.centerEl.textContent = text;
   }
 
-  showEnd(winner: 'mice' | 'cats', reason: string, onLobby: () => void): void {
+  showEnd(
+    winner: Team | 'draw',
+    reason: string,
+    scoreA: number,
+    scoreB: number,
+    onLobby: () => void,
+  ): void {
     if (this.endEl) return;
     this.endEl = document.createElement('div');
     this.endEl.className = 'end-overlay';
-    const title = winner === 'mice' ? '🐭 ネズミチームの勝ち！' : '🐱 猫チームの勝ち！';
+    const title = winner === 'draw' ? '🤝 引き分け！' : `🏆 チーム${winner}の勝ち！`;
     this.endEl.innerHTML = `
-      <div class="end-panel ${winner}">
+      <div class="end-panel">
         <h1>${title}</h1>
+        <p class="end-score">A ${scoreA} - ${scoreB} B</p>
         <p>${reason}</p>
         <button class="btn primary" id="btn-lobby">ロビーに戻る</button>
       </div>
