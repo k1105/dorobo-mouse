@@ -5,14 +5,16 @@ export const CONFIG = {
   /** 盗みスポットの判定半径 */
   stealRadius: 2.0,
   /** ネズミの移動速度 */
-  mouseSpeed: 4,
-  /** 猫（鬼）の移動速度（ネズミの2倍） */
+  mouseSpeed: 3.2,
+  /** 猫（鬼）の移動速度 */
   catSpeed: 8,
   /** NPCネズミの数 */
-  npcCount: 14,
-  /** NPCの歩行速度の範囲 */
-  npcSpeedMin: 1.8,
-  npcSpeedMax: 2.6,
+  npcCount: 60,
+  /** NPCの歩行速度の範囲（個体差） */
+  npcSpeedMin: 1.6,
+  npcSpeedMax: 3.0,
+  /** NPCが小走りするときの速度倍率 */
+  npcScurryMult: 1.6,
   /** 1ラウンドの制限時間（秒）。時間切れは猫の勝ち */
   roundTimeSec: 300,
   /** 猫がキャッチできる距離 */

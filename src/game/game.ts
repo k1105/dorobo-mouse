@@ -5,6 +5,7 @@ import type { GameEvent, PhaseState, PlayerInfo, PosMsg, Role } from '../types';
 import { isMouse } from '../types';
 import { Controls } from './controls';
 import { CctvView } from './cctv';
+import { CamMapView } from '../ui/map';
 import { createNpcSims, NpcSim } from './npc';
 import { buildWorld, makeCapsule, type World } from './world';
 import { Hud } from '../ui/hud';
@@ -35,6 +36,7 @@ export class Game {
   private controls = new Controls();
   private hud: Hud;
   private cctv: CctvView | null = null;
+  private camMap: CamMapView | null = null;
 
   private myMesh: THREE.Mesh | null = null;
   private selfRing: THREE.Mesh | null = null;
@@ -85,7 +87,7 @@ export class Game {
 
     // ワールドとNPC
     this.world = buildWorld(this.scene, this.seed);
-    this.npcSims = createNpcSims(this.seed, CONFIG.npcCount);
+    this.npcSims = createNpcSims(this.seed, CONFIG.npcCount, this.world.nav);
     for (let i = 0; i < CONFIG.npcCount; i++) {
       const mesh = makeCapsule('mouse');
       this.scene.add(mesh);
@@ -127,6 +129,11 @@ export class Game {
 
     // HUD
     this.hud = new Hud(container, this.myRole);
+
+    // 猫チームはカメラ配置と視野（死角）が分かるマップを見られる
+    if (this.myRole === 'catCamera' || this.myRole === 'catSeeker') {
+      this.camMap = new CamMapView(container, this.world.mapData);
+    }
 
     // カメラ監視役はCCTVビュー
     if (this.myRole === 'catCamera') {
@@ -319,6 +326,10 @@ export class Game {
   // ---- 入力 ----
 
   private onKey(code: string): void {
+    if (code === 'KeyM' && this.camMap) {
+      this.camMap.toggle();
+      return;
+    }
     if (this.cctv) {
       this.cctv.handleKey(code);
       return;
@@ -542,8 +553,8 @@ export class Game {
       this.followCam.position.set(p.x, p.y + 8, p.z + 7);
       this.followCam.lookAt(p.x, 0.5, p.z - 1);
     } else {
-      // 観戦者は俯瞰
-      this.followCam.position.set(0, 28, 14);
+      // 観戦者は俯瞰（フロア全体が入る高さ）
+      this.followCam.position.set(0, 36, 18);
       this.followCam.lookAt(0, 0, 0);
     }
   }
@@ -564,6 +575,7 @@ export class Game {
     this.controls.dispose();
     this.hud.dispose();
     this.cctv?.dispose();
+    this.camMap?.dispose();
     window.removeEventListener('resize', this.onResize);
     this.scene.traverse((obj) => {
       if (obj instanceof THREE.Mesh) {

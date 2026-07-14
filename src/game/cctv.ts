@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 
-const GRID_COLS = 3;
-const GRID_ROWS = 2;
+const GRID_COLS = 4;
+const GRID_ROWS = 3;
 
 /**
  * 猫（カメラ監視役）用の防犯カメラビュー。

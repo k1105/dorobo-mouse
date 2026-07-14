@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { mulberry32 } from './rng';
-import { CORRIDOR_XS, LANE_ZS } from './world';
+import type { NavGrid } from './nav';
 
 interface Segment {
   t0: number;
@@ -14,33 +14,38 @@ interface Segment {
 /**
  * NPCネズミの決定論的シミュレーション。
  * 同じseedなら全クライアントで posAt(t) が同じ値を返すため、位置の通信同期が不要。
- * 移動は「通路（縦レーン）内の移動」と「両端の横道(z=±10)経由の通路替え」のみで、棚を貫通しない。
+ * 移動は歩行グリッド（NavGrid）上のBFS経路に沿うため、棚を貫通しない。
  */
 export class NpcSim {
   private rng: () => number;
+  private nav: NavGrid;
   private speed: number;
+  /** 立ち止まり時間の個体差（小さいほどせかせか動く） */
+  private pauseScale: number;
+  /** 小走りで移動する確率（個体差） */
+  private scurryChance: number;
   private segs: Segment[] = [];
   private genUntil = 0;
-  private curCorridor: number;
-  private curLane: number;
   private searchIdx = 0;
 
-  constructor(seed: number) {
+  constructor(seed: number, nav: NavGrid) {
     this.rng = mulberry32(seed);
+    this.nav = nav;
     this.speed =
       CONFIG.npcSpeedMin + this.rng() * (CONFIG.npcSpeedMax - CONFIG.npcSpeedMin);
-    this.curCorridor = Math.floor(this.rng() * CORRIDOR_XS.length);
-    this.curLane = Math.floor(this.rng() * LANE_ZS.length);
+    this.pauseScale = 0.5 + this.rng() * 1.2;
+    this.scurryChance = 0.05 + this.rng() * 0.25;
     // 初期位置に少し立ち止まってから動き出す
-    const x = this.jitterX(this.curCorridor);
-    const z = LANE_ZS[this.curLane];
-    this.segs.push({ t0: 0, t1: 0.5 + this.rng() * 2, x0: x, z0: z, x1: x, z1: z });
+    const start = this.nav.randomNode(this.rng);
+    this.segs.push({
+      t0: 0,
+      t1: 0.5 + this.rng() * 2,
+      x0: start.x,
+      z0: start.z,
+      x1: start.x,
+      z1: start.z,
+    });
     this.genUntil = this.segs[0].t1;
-  }
-
-  /** 通路の中でロボットっぽくならないよう横に少しずらす */
-  private jitterX(corridorIdx: number): number {
-    return CORRIDOR_XS[corridorIdx] + (this.rng() - 0.5) * 1.2;
   }
 
   private lastPos(): { x: number; z: number } {
@@ -48,11 +53,11 @@ export class NpcSim {
     return { x: s.x1, z: s.z1 };
   }
 
-  private walkTo(x: number, z: number): void {
+  private walkTo(x: number, z: number, speedMult = 1): void {
     const from = this.lastPos();
     const dist = Math.hypot(x - from.x, z - from.z);
     if (dist < 0.01) return;
-    const dur = dist / this.speed;
+    const dur = dist / (this.speed * speedMult);
     this.segs.push({
       t0: this.genUntil,
       t1: this.genUntil + dur,
@@ -77,24 +82,45 @@ export class NpcSim {
     this.genUntil += sec;
   }
 
-  /** 次の行動（別の棚を見に行く）を1つ生成 */
-  private genNextTrip(): void {
-    const targetCorridor = Math.floor(this.rng() * CORRIDOR_XS.length);
-    const targetLane = Math.floor(this.rng() * LANE_ZS.length);
-    if (targetCorridor !== this.curCorridor) {
-      // 通路替えは横道（LANE_ZSの両端）を経由する
-      const rowLane = this.rng() < 0.5 ? 0 : LANE_ZS.length - 1;
-      const rowZ = LANE_ZS[rowLane];
-      const exitX = this.jitterX(this.curCorridor);
-      this.walkTo(exitX, rowZ);
-      this.walkTo(this.jitterX(targetCorridor), rowZ);
+  /** 目的地まで経路に沿って歩く。中継点に少しゆらぎを入れてロボットっぽさを消す */
+  private walkPath(destX: number, destZ: number, speedMult: number): void {
+    const from = this.lastPos();
+    const pts = this.nav.path(from.x, from.z, destX, destZ);
+    for (const p of pts) {
+      const jx = (this.rng() - 0.5) * 0.3;
+      const jz = (this.rng() - 0.5) * 0.3;
+      this.walkTo(p.x + jx, p.z + jz, speedMult);
     }
-    const destX = this.jitterX(targetCorridor);
-    const destZ = LANE_ZS[targetLane] + (this.rng() - 0.5) * 1.5;
-    this.walkTo(destX, destZ);
-    this.pause(1 + this.rng() * 4); // 棚の前で品定め
-    this.curCorridor = targetCorridor;
-    this.curLane = targetLane;
+  }
+
+  /** 次の行動を1つ生成。行動パターンを確率で選ぶ */
+  private genNextTrip(): void {
+    const r = this.rng();
+    if (r < 0.3) {
+      this.genBrowse();
+    } else if (r < 0.3 + this.scurryChance) {
+      this.genTrip(CONFIG.npcScurryMult); // 小走りで別の棚へ
+    } else {
+      this.genTrip(0.85 + this.rng() * 0.3); // 歩幅にも毎回ゆらぎを入れる
+    }
+  }
+
+  /** 近くの棚をゆっくり眺めて回る */
+  private genBrowse(): void {
+    const steps = 1 + Math.floor(this.rng() * 2);
+    for (let i = 0; i < steps; i++) {
+      const cur = this.lastPos();
+      const dest = this.nav.randomNodeNear(cur.x, cur.z, 6, this.rng);
+      this.walkPath(dest.x, dest.z, 0.6 + this.rng() * 0.25);
+      this.pause((0.5 + this.rng() * 2) * this.pauseScale);
+    }
+  }
+
+  /** 別の売り場を見に行く */
+  private genTrip(speedMult: number): void {
+    const dest = this.nav.randomNode(this.rng);
+    this.walkPath(dest.x, dest.z, speedMult);
+    this.pause((1 + this.rng() * 4) * this.pauseScale); // 棚の前で品定め
   }
 
   private ensure(t: number): void {
@@ -127,10 +153,10 @@ export class NpcSim {
 }
 
 /** ゲームseedからNPC群を作る */
-export function createNpcSims(seed: number, count: number): NpcSim[] {
+export function createNpcSims(seed: number, count: number, nav: NavGrid): NpcSim[] {
   const sims: NpcSim[] = [];
   for (let i = 0; i < count; i++) {
-    sims.push(new NpcSim((seed ^ (i * 0x9e3779b9)) >>> 0));
+    sims.push(new NpcSim((seed ^ (i * 0x9e3779b9)) >>> 0, nav));
   }
   return sims;
 }
