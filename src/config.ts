@@ -39,10 +39,31 @@ export const COLORS = {
   target: 0xffb300,
 } as const;
 
-/** 盗む商品の名前リスト */
-export const ITEMS = [
-  'スナック菓子', '牛乳', 'チーズ', '食パン', 'りんご',
-  'バナナ', 'チョコレート', 'カップ麺', 'おにぎり', 'ジュース',
-  'ヨーグルト', '卵', 'ハム', 'クッキー', 'アイスクリーム',
-  'コーヒー豆', 'はちみつ', 'バター', 'シリアル', 'グミ',
+/** 盗む商品のリスト（値段は円。持ち出しに成功すると値段分がチームスコアに加算される） */
+export interface Item {
+  name: string;
+  price: number;
+}
+
+export const ITEMS: readonly Item[] = [
+  { name: 'スナック菓子', price: 150 },
+  { name: '牛乳', price: 250 },
+  { name: 'チーズ', price: 400 },
+  { name: '食パン', price: 200 },
+  { name: 'りんご', price: 180 },
+  { name: 'バナナ', price: 150 },
+  { name: 'チョコレート', price: 250 },
+  { name: 'カップ麺', price: 200 },
+  { name: 'おにぎり', price: 150 },
+  { name: 'ジュース', price: 160 },
+  { name: 'ヨーグルト', price: 180 },
+  { name: '卵', price: 300 },
+  { name: 'ハム', price: 350 },
+  { name: 'クッキー', price: 300 },
+  { name: 'アイスクリーム', price: 280 },
+  { name: 'コーヒー豆', price: 800 },
+  { name: 'はちみつ', price: 900 },
+  { name: 'バター', price: 450 },
+  { name: 'シリアル', price: 500 },
+  { name: 'グミ', price: 120 },
 ] as const;

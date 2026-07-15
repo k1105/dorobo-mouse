@@ -7,7 +7,7 @@ import { Controls } from './controls';
 import { CctvView } from './cctv';
 import { CamMapView } from '../ui/map';
 import { createNpcSims, NpcSim } from './npc';
-import { buildWorld, makeCapsule, type World } from './world';
+import { buildWorld, makeCapsule, type Spot, type World } from './world';
 import { Hud } from '../ui/hud';
 
 interface RemoteAvatar {
@@ -50,15 +50,16 @@ export class Game {
   private npcMeshes: THREE.Mesh[] = [];
   private npcFlashUntil: number[] = [];
 
-  private targetMarker: THREE.Group;
-
   private stealCount = 0;
   private myCarrying = 0;
+  /** 所持中の商品の合計金額（円）。出口を通るとこの値がスコアに加算される */
+  private myCarryingValue = 0;
   private scoreA = 0;
   private scoreB = 0;
   private myDoubtsUsed = 0;
-  private insideStart: number | null = null;
-  private lastTargetIdx = -1;
+  /** 盗み中のスポットと開始時刻（ゲーム内時間）。nullなら盗んでいない */
+  private stealSpot: Spot | null = null;
+  private stealStart: number | null = null;
   private phase: PhaseState;
   private endSent = false;
   private seenEvents = new Set<string>();
@@ -135,13 +136,9 @@ export class Game {
       this.remotes.set(pid, { mesh, target: null });
     }
 
-    // お題スポットのマーカー（ネズミにだけ見える）
-    this.targetMarker = this.buildTargetMarker();
-    this.targetMarker.visible = false;
-    this.scene.add(this.targetMarker);
-
     // HUD
     this.hud = new Hud(container, this.roleLabel());
+    if (this.amMouse) this.hud.showStealButton(() => this.tryStartSteal());
     if (phase.note) this.hud.banner(phase.note, 'info');
     if (this.round === 2 && this.myTeam) {
       this.hud.banner(`後半戦: あなたは${this.amMouse ? '🐭 ネズミ' : '🎥 カメラ監視'}です`, 'info');
@@ -171,7 +168,6 @@ export class Game {
       this.net.subscribe(`rooms/${room}/cams`, (val) => this.onCams(val)),
     );
 
-    this.applyTarget();
     this.raf = requestAnimationFrame(this.loop);
   }
 
@@ -186,29 +182,6 @@ export class Game {
     // ネズミは下側の通路にばらけてスポーン
     const i = this.myRole === 'a1' || this.myRole === 'b1' ? -1 : 1;
     return { x: i * 7.5, z: 10.5 };
-  }
-
-  private buildTargetMarker(): THREE.Group {
-    const g = new THREE.Group();
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(CONFIG.stealRadius - 0.25, CONFIG.stealRadius, 40),
-      new THREE.MeshBasicMaterial({
-        color: 0xffb300,
-        side: THREE.DoubleSide,
-        transparent: true,
-        opacity: 0.9,
-      }),
-    );
-    ring.rotation.x = -Math.PI / 2;
-    ring.position.y = 0.06;
-    g.add(ring);
-    const beam = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.18, 0.18, 6, 12, 1, true),
-      new THREE.MeshBasicMaterial({ color: 0xffb300, transparent: true, opacity: 0.35 }),
-    );
-    beam.position.y = 3;
-    g.add(beam);
-    return g;
   }
 
   /** joinedAt最小のプレイヤーがホスト（時間切れのラウンド送りを担当） */
@@ -253,35 +226,42 @@ export class Game {
       this.applyEvent(all[key], firstBatch);
     }
     this.eventsInitialized = true;
-    this.applyTarget();
   }
 
   private applyEvent(ev: GameEvent, silent: boolean): void {
     switch (ev.type) {
-      case 'steal':
+      case 'steal': {
         if (ev.round !== this.round) break;
         this.stealCount++;
-        if (ev.by === this.net.clientId) this.myCarrying++;
+        const item = this.world.spots[ev.spotIdx]?.item;
+        if (ev.by === this.net.clientId) {
+          this.myCarrying++;
+          this.myCarryingValue += item?.price ?? 0;
+        }
         if (!silent && this.amMouse) {
           this.hud.banner(
             ev.by === this.net.clientId
-              ? '盗み成功！出口から持ち出そう！'
+              ? `${item ? `「${item.name}」(${item.price}円)を` : ''}盗んだ！出口から持ち出そう！`
               : '仲間が盗みに成功！',
             'info',
           );
         }
         break;
+      }
       case 'escape': {
         const team = teamOf(this.players[ev.by]?.role ?? 'none');
-        if (team === 'A') this.scoreA++;
-        else if (team === 'B') this.scoreB++;
-        // リロード時のイベント再生でも所持数が正しく復元されるようにする
-        if (ev.by === this.net.clientId && ev.round === this.round) this.myCarrying = 0;
+        if (team === 'A') this.scoreA += ev.value;
+        else if (team === 'B') this.scoreB += ev.value;
+        // リロード時のイベント再生でも所持数・所持金額が正しく復元されるようにする
+        if (ev.by === this.net.clientId && ev.round === this.round) {
+          this.myCarrying = 0;
+          this.myCarryingValue = 0;
+        }
         if (!silent && team) {
           this.hud.banner(
             ev.by === this.net.clientId
-              ? '万引き成功！+1ポイント'
-              : `チーム${team}が1ポイント獲得！`,
+              ? `万引き成功！+${ev.value}円`
+              : `チーム${team}が${ev.value}円分を獲得！`,
             'info',
           );
         }
@@ -388,22 +368,38 @@ export class Game {
     }
   }
 
-  // ---- お題 ----
+  // ---- 盗み ----
 
-  private currentTargetIdx(): number {
-    return this.world.targetOrder[this.stealCount % this.world.targetOrder.length];
+  /** 盗むボタン: 一番近い商品棚スポットが判定半径内にあれば盗みを開始する */
+  private tryStartSteal(): void {
+    if (!this.amMouse || !this.myMesh || this.stealStart !== null) return;
+    if (this.phase.phase !== 'playing' || (this.phase.round ?? 1) !== this.round) return;
+    const t = this.gameTime();
+    if (t < 0) return;
+    let best: Spot | null = null;
+    let bestD: number = CONFIG.stealRadius;
+    for (const s of this.world.spots) {
+      const d = Math.hypot(this.baseX - s.x, this.baseZ - s.z);
+      if (d <= bestD) {
+        bestD = d;
+        best = s;
+      }
+    }
+    if (!best) {
+      this.hud.banner('商品棚の近くでないと盗めません', 'alert');
+      return;
+    }
+    this.stealSpot = best;
+    this.stealStart = t;
+    this.hud.setStealActive(true);
   }
 
-  private applyTarget(): void {
-    const idx = this.currentTargetIdx();
-    if (idx === this.lastTargetIdx) return;
-    this.lastTargetIdx = idx;
-    this.insideStart = null;
-    const spot = this.world.spots[idx];
-    this.targetMarker.position.set(spot.x, 0, spot.z);
-    // お題の場所と内容はネズミにしか見えない
-    this.targetMarker.visible = this.amMouse;
-    if (this.amMouse) this.hud.setTarget(spot.item);
+  /** 盗みの中断・完了処理（進捗バーとボタン状態を戻す） */
+  private cancelSteal(): void {
+    this.stealSpot = null;
+    this.stealStart = null;
+    this.hud.setProgress(null);
+    this.hud.setStealActive(false);
   }
 
   // ---- 入力 ----
@@ -506,7 +502,7 @@ export class Game {
       // 盗み中は体をわずかに左右（向きに対して垂直方向）に揺さぶる
       let ox = 0;
       let oz = 0;
-      if (playing && this.insideStart !== null) {
+      if (playing && this.stealStart !== null) {
         const s = Math.sin(t * CONFIG.swayHz * Math.PI * 2) * CONFIG.swayAmp;
         const ry = this.myMesh.rotation.y;
         ox = Math.cos(ry) * s;
@@ -560,48 +556,48 @@ export class Game {
       r.mesh.rotation.y = r.target.ry;
     }
 
-    // ネズミの盗み判定
+    // ネズミの盗み判定（盗むボタンで開始し、スポットの判定半径内に居続けると成立）
     if (playing && this.amMouse && this.myMesh) {
-      const spot = this.world.spots[this.currentTargetIdx()];
-      const d = Math.hypot(this.baseX - spot.x, this.baseZ - spot.z);
-      if (d <= CONFIG.stealRadius) {
-        if (this.insideStart === null) this.insideStart = t;
-        const p = (t - this.insideStart) / CONFIG.stealTimeSec;
-        this.hud.setProgress(p);
-        if (p >= 1) {
-          this.insideStart = null;
-          this.hud.setProgress(null);
-          this.net.push(`rooms/${this.room}/events`, {
-            type: 'steal',
-            by: this.net.clientId,
-            spotIdx: spot.idx,
-            round: this.round,
-            at: Date.now(),
-          } satisfies GameEvent);
+      if (this.stealSpot && this.stealStart !== null) {
+        const d = Math.hypot(this.baseX - this.stealSpot.x, this.baseZ - this.stealSpot.z);
+        if (d > CONFIG.stealRadius) {
+          // 棚から離れたら中断
+          this.cancelSteal();
+        } else {
+          const p = (t - this.stealStart) / CONFIG.stealTimeSec;
+          this.hud.setProgress(p);
+          if (p >= 1) {
+            const spotIdx = this.stealSpot.idx;
+            this.cancelSteal();
+            this.net.push(`rooms/${this.room}/events`, {
+              type: 'steal',
+              by: this.net.clientId,
+              spotIdx,
+              round: this.round,
+              at: Date.now(),
+            } satisfies GameEvent);
+          }
         }
-      } else {
-        this.insideStart = null;
-        this.hud.setProgress(null);
       }
-      // 出口判定: 商品を持って出口を通ると1ポイント → カメラの死角にリスポーンして次のお題へ
+      // 出口判定: 商品を持って出口を通ると所持金額分のポイント → カメラの死角にリスポーン
       if (this.myCarrying > 0 && this.world.isInExitZone(this.baseX, this.baseZ)) {
+        const value = this.myCarryingValue;
         this.myCarrying = 0;
+        this.myCarryingValue = 0;
         this.net.push(`rooms/${this.room}/events`, {
           type: 'escape',
           by: this.net.clientId,
+          value,
           round: this.round,
           at: Date.now(),
         } satisfies GameEvent);
         this.baseX = this.world.blindSpawn.x;
         this.baseZ = this.world.blindSpawn.z;
-        this.insideStart = null;
+        this.cancelSteal();
       }
-    }
-
-    // お題マーカーの明滅
-    if (this.targetMarker.visible) {
-      const s = 1 + Math.sin(now / 250) * 0.08;
-      this.targetMarker.scale.set(s, 1, s);
+    } else if (this.stealStart !== null) {
+      // ラウンド終了・開始前カウントダウン中は盗みを中断する
+      this.cancelSteal();
     }
 
     // タイマー・スコア・補助情報
@@ -609,7 +605,7 @@ export class Game {
     this.hud.setTimer(remain);
     this.hud.setScore(this.round, this.scoreA, this.scoreB);
     if (this.amMouse) {
-      this.hud.setInfo(`盗み: ${this.stealCount} / 所持: ${this.myCarrying}`);
+      this.hud.setInfo(`盗み: ${this.stealCount} / 所持: ${this.myCarrying}個 (${this.myCarryingValue}円)`);
     } else if (this.amCat) {
       this.hud.setInfo(`ダウト残り: ${this.doubtsLeft()}/${CONFIG.doubtsPerRound}`);
     }

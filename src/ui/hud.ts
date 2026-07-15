@@ -7,7 +7,7 @@ export class Hud {
   private timerEl: HTMLSpanElement;
   private scoreEl: HTMLSpanElement;
   private infoEl: HTMLSpanElement;
-  private targetEl: HTMLDivElement;
+  private stealBtn: HTMLButtonElement;
   private progressWrap: HTMLDivElement;
   private progressBar: HTMLDivElement;
   private bannerWrap: HTMLDivElement;
@@ -24,7 +24,7 @@ export class Hud {
         <span class="hud-score"></span>
         <span class="hud-info"></span>
       </div>
-      <div class="hud-target hidden"></div>
+      <button class="hud-steal-btn hidden">🫳 盗む</button>
       <div class="hud-progress hidden"><div class="hud-progress-bar"></div><span class="hud-progress-label">盗み中…</span></div>
       <div class="hud-banners"></div>
       <div class="hud-center"></div>
@@ -34,7 +34,7 @@ export class Hud {
     this.timerEl = this.root.querySelector('.hud-timer')!;
     this.scoreEl = this.root.querySelector('.hud-score')!;
     this.infoEl = this.root.querySelector('.hud-info')!;
-    this.targetEl = this.root.querySelector('.hud-target')!;
+    this.stealBtn = this.root.querySelector('.hud-steal-btn')!;
     this.progressWrap = this.root.querySelector('.hud-progress')!;
     this.progressBar = this.root.querySelector('.hud-progress-bar')!;
     this.bannerWrap = this.root.querySelector('.hud-banners')!;
@@ -50,9 +50,9 @@ export class Hud {
     this.timerEl.classList.toggle('urgent', s <= 10);
   }
 
-  /** ラウンドとチームスコアの表示 */
+  /** ラウンドとチームスコア（盗んだ商品の累計金額）の表示 */
   setScore(round: number, scoreA: number, scoreB: number): void {
-    this.scoreEl.textContent = `${round === 1 ? '前半' : '後半'}  A ${scoreA} - ${scoreB} B`;
+    this.scoreEl.textContent = `${round === 1 ? '前半' : '後半'}  A ${scoreA}円 - ${scoreB}円 B`;
   }
 
   /** 役割ごとの補助情報（ネズミ: 所持数 / 猫: ダウト残数） */
@@ -60,14 +60,19 @@ export class Hud {
     this.infoEl.textContent = text;
   }
 
-  /** ネズミ専用: 現在のお題を表示 */
-  setTarget(item: string | null): void {
-    if (item === null) {
-      this.targetEl.classList.add('hidden');
-    } else {
-      this.targetEl.classList.remove('hidden');
-      this.targetEl.textContent = `お題: ${item} を取ってきてください`;
-    }
+  /** ネズミ専用: 盗むボタンを表示する */
+  showStealButton(onSteal: () => void): void {
+    this.stealBtn.classList.remove('hidden');
+    this.stealBtn.onclick = () => {
+      // フォーカスを残すとSpace/Enterでボタンが再発火して移動キーと干渉するため外す
+      this.stealBtn.blur();
+      onSteal();
+    };
+  }
+
+  /** 盗み中はボタンを押せなくする */
+  setStealActive(active: boolean): void {
+    this.stealBtn.disabled = active;
   }
 
   /** 盗み進捗（0..1）。nullで非表示 */
@@ -108,7 +113,7 @@ export class Hud {
     this.endEl.innerHTML = `
       <div class="end-panel">
         <h1>${title}</h1>
-        <p class="end-score">A ${scoreA} - ${scoreB} B</p>
+        <p class="end-score">A ${scoreA}円 - ${scoreB}円 B</p>
         <p>${reason}</p>
         <button class="btn primary" id="btn-lobby">ロビーに戻る</button>
       </div>

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COLORS, ITEMS } from '../config';
+import { COLORS, ITEMS, type Item } from '../config';
 import { mulberry32, shuffled } from './rng';
 import { NavGrid } from './nav';
 
@@ -11,12 +11,12 @@ export interface Rect {
   maxZ: number;
 }
 
-/** 盗みスポット（棚の一区画） */
+/** 盗みスポット（棚の一区画）。itemの値段が持ち出し時のスコアになる */
 export interface Spot {
   idx: number;
   x: number;
   z: number;
-  item: string;
+  item: Item;
 }
 
 /** カメラマップ描画用のカメラ情報 */
@@ -52,8 +52,6 @@ export interface MapData {
 export interface World {
   obstacles: Rect[];
   spots: Spot[];
-  /** 盗みのお題の出現順（seedから決定論的に生成） */
-  targetOrder: number[];
   cctvCams: THREE.PerspectiveCamera[];
   camPositions: THREE.Vector3[];
   /** ポール上部の球体。オンライン時に発光させる */
@@ -292,11 +290,6 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
       }
     }
   }
-  const targetOrder = shuffled(
-    spots.map((s) => s.idx),
-    mulberry32(seed ^ 0x7a26e7),
-  );
-
   // 防犯カメラ12台。赤い球で見える化（球はオンライン時に発光させるため個別マテリアル）
   const cctvCams: THREE.PerspectiveCamera[] = [];
   const camPositions: THREE.Vector3[] = [];
@@ -398,7 +391,6 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
   return {
     obstacles,
     spots,
-    targetOrder,
     cctvCams,
     camPositions,
     camBalls,

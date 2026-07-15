@@ -54,6 +54,7 @@ export interface PosMsg {
 
 export type GameEvent =
   | { type: 'steal'; by: string; spotIdx: number; round: Round; at: number }
-  | { type: 'escape'; by: string; round: Round; at: number }
+  /** valueは持ち出した商品の合計金額（円）。この値がチームスコアに加算される */
+  | { type: 'escape'; by: string; value: number; round: Round; at: number }
   | { type: 'miss'; by: string; npcIdx: number; round: Round; at: number }
   | { type: 'caught'; by: string; mouseId: string; round: Round; at: number };
