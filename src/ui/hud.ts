@@ -94,9 +94,19 @@ export class Hud {
     setTimeout(() => el.remove(), 5000);
   }
 
-  /** 画面中央の大きい文字（カウントダウンなど）。空文字で消す */
-  setCenter(text: string): void {
+  /** 画面中央の大きい文字（カウントダウンなど）。空文字で消す。small=trueで控えめサイズ */
+  setCenter(text: string, small = false): void {
     this.centerEl.textContent = text;
+    this.centerEl.classList.toggle('small', small);
+  }
+
+  /** ダウト成功時の全画面演出。durationMs後に自動で消える */
+  showDoubtSuccess(durationMs: number): void {
+    const el = document.createElement('div');
+    el.className = 'doubt-overlay';
+    el.innerHTML = '<div class="doubt-text">ダウト成功！</div>';
+    this.root.appendChild(el);
+    setTimeout(() => el.remove(), durationMs);
   }
 
   showEnd(

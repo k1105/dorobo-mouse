@@ -300,6 +300,39 @@ body,
   font-weight: bold;
   text-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
 }
+.hud-center.small {
+  font-size: 28px;
+  white-space: nowrap;
+}
+
+/* ---- ダウト成功演出 ---- */
+.doubt-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 6;
+}
+.doubt-text {
+  font-size: min(13vw, 120px);
+  font-weight: bold;
+  color: #ff5252;
+  text-shadow: 0 6px 24px rgba(0, 0, 0, 0.8);
+  animation: doubt-pop 0.35s ease-out;
+  white-space: nowrap;
+}
+@keyframes doubt-pop {
+  from {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
 
 /* ---- 終了画面 ---- */
 .end-overlay {

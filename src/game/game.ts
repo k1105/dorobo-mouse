@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CONFIG } from '../config';
+import { CONFIG, COLORS } from '../config';
 import type { NetAdapter } from '../net';
 import type { GameEvent, PhaseState, PlayerInfo, PosMsg, Role, Round, Team } from '../types';
 import { isMouseInRound, teamOf } from '../types';
@@ -13,6 +13,9 @@ import { Hud } from '../ui/hud';
 interface RemoteAvatar {
   mesh: THREE.Mesh;
   target: PosMsg | null;
+  /** 補間済みの実位置（揺れオフセットを含まない）。mesh.positionは表示用でこれに揺れを足す */
+  sx: number;
+  sz: number;
 }
 
 /**
@@ -60,6 +63,12 @@ export class Game {
   /** 盗み中のスポットと開始時刻（ゲーム内時間）。nullなら盗んでいない */
   private stealSpot: Spot | null = null;
   private stealStart: number | null = null;
+  /** デバッグ用隠しコマンド: Sキーでトグル。ONの間は盗みモーション（揺れ）を常時再生する */
+  private debugStealMotion = false;
+  /** 万引き成功後のリスポーン予定時刻（ゲーム内時間）。nullなら通常状態 */
+  private respawnAt: number | null = null;
+  /** ダウト成功演出の後にラウンドを送るためのタイマー */
+  private advanceTimer = 0;
   private phase: PhaseState;
   private endSent = false;
   private seenEvents = new Set<string>();
@@ -133,7 +142,7 @@ export class Game {
       const mesh = makeCapsule();
       mesh.visible = false; // 最初の位置情報が来るまで隠す
       this.scene.add(mesh);
-      this.remotes.set(pid, { mesh, target: null });
+      this.remotes.set(pid, { mesh, target: null, sx: 0, sz: 0 });
     }
 
     // HUD
@@ -207,10 +216,13 @@ export class Game {
       if (r) {
         if (!r.target) {
           // 初回はワープして表示
+          r.sx = pos.x;
+          r.sz = pos.z;
           r.mesh.position.x = pos.x;
           r.mesh.position.z = pos.z;
-          r.mesh.visible = true;
         }
+        // リスポーン待ち中のプレイヤーは非表示（ダウトの対象にもならない）
+        r.mesh.visible = !pos.hidden;
         r.target = pos;
       }
     }
@@ -286,6 +298,13 @@ export class Game {
         if (!silent) {
           const name = this.players[ev.mouseId]?.name ?? 'ネズミ';
           this.hud.banner(`🚨 ダウト成功！${name} が見破られた！`, 'alert');
+          // 全画面演出＋見破られたプレイヤーを緑色にして誰が捕まったか見せる
+          this.hud.showDoubtSuccess(CONFIG.doubtEffectSec * 1000);
+          const mesh =
+            ev.mouseId === this.net.clientId ? this.myMesh : this.remotes.get(ev.mouseId)?.mesh;
+          if (mesh) {
+            (mesh.material as THREE.MeshStandardMaterial).color.setHex(COLORS.caught);
+          }
         }
         break;
     }
@@ -373,6 +392,7 @@ export class Game {
   /** 盗むボタン: 一番近い商品棚スポットが判定半径内にあれば盗みを開始する */
   private tryStartSteal(): void {
     if (!this.amMouse || !this.myMesh || this.stealStart !== null) return;
+    if (this.respawnAt !== null) return;
     if (this.phase.phase !== 'playing' || (this.phase.round ?? 1) !== this.round) return;
     const t = this.gameTime();
     if (t < 0) return;
@@ -407,6 +427,14 @@ export class Game {
   private onKey(code: string): void {
     if (code === 'KeyM' && this.camMap) {
       this.camMap.toggle();
+      return;
+    }
+    if (code === 'KeyS' && this.amMouse) {
+      this.debugStealMotion = !this.debugStealMotion;
+      this.hud.banner(
+        `デバッグ: 盗みモーション常時再生 ${this.debugStealMotion ? 'ON' : 'OFF'}`,
+        'info',
+      );
       return;
     }
     this.cctv?.handleKey(code);
@@ -451,7 +479,10 @@ export class Game {
           at: Date.now(),
         } satisfies GameEvent);
         const name = this.players[pid]?.name ?? 'ネズミ';
-        this.advanceRound(`ダウト成功！${name} を見破った！`);
+        // 全画面演出を見せてから攻守交代する
+        this.advanceTimer = window.setTimeout(() => {
+          if (!this.disposed) this.advanceRound(`ダウト成功！${name} を見破った！`);
+        }, CONFIG.doubtEffectSec * 1000);
         return;
       }
     }
@@ -483,15 +514,26 @@ export class Game {
     const playing =
       this.phase.phase === 'playing' && (this.phase.round ?? 1) === this.round && t >= 0;
 
-    // 開始前カウントダウン
+    // 万引き成功後のリスポーン（待ち時間が明けたら死角に出現）
+    if (this.myMesh && playing && this.respawnAt !== null && t >= this.respawnAt) {
+      this.respawnAt = null;
+      this.baseX = this.world.blindSpawn.x;
+      this.baseZ = this.world.blindSpawn.z;
+      this.myMesh.visible = true;
+      if (this.selfRing) this.selfRing.visible = true;
+    }
+
+    // 開始前カウントダウン／リスポーン待ちの残り秒数
     if (this.phase.phase === 'playing' && t < 0) {
       this.hud.setCenter(String(Math.ceil(-t)));
+    } else if (playing && this.respawnAt !== null) {
+      this.hud.setCenter(`復帰まで ${Math.ceil(this.respawnAt - t)}秒`, true);
     } else {
       this.hud.setCenter('');
     }
 
-    // 自分の移動（実位置=base。表示位置は揺れモーションを足す）
-    if (this.myMesh && playing) {
+    // 自分の移動（実位置=base。表示位置は揺れモーションを足す）。リスポーン待ち中は動けない
+    if (this.myMesh && playing && this.respawnAt === null) {
       const mv = this.controls.moveVec();
       if (mv.x !== 0 || mv.z !== 0) {
         this.moveWithCollision(mv.x * CONFIG.mouseSpeed * dt, mv.z * CONFIG.mouseSpeed * dt);
@@ -499,25 +541,29 @@ export class Game {
       }
     }
     if (this.myMesh) {
-      // 盗み中は体をわずかに左右（向きに対して垂直方向）に揺さぶる
+      // 盗み中は体を小さな円を描くように揺さぶる（一方向の往復だとカメラの視線と揺れの軸が
+      // 一致したとき奥行き方向の動きになって見えないため、XZ両軸に動かす）
+      const swaying = playing && (this.stealStart !== null || this.debugStealMotion);
       let ox = 0;
       let oz = 0;
-      if (playing && this.stealStart !== null) {
-        const s = Math.sin(t * CONFIG.swayHz * Math.PI * 2) * CONFIG.swayAmp;
-        const ry = this.myMesh.rotation.y;
-        ox = Math.cos(ry) * s;
-        oz = -Math.sin(ry) * s;
+      if (swaying) {
+        const phase = t * CONFIG.swayHz * Math.PI * 2;
+        ox = Math.cos(phase) * CONFIG.swayAmp;
+        oz = Math.sin(phase) * CONFIG.swayAmp;
       }
       this.myMesh.position.x = this.baseX + ox;
       this.myMesh.position.z = this.baseZ + oz;
-      // 位置送信（スロットリング）。揺れ込みの表示位置を送るのでカメラ側からも揺れが見える
+      // 位置送信（スロットリング）。揺れは低頻度送信+補間で潰れるため位置には含めず、
+      // swayフラグを送って受信側にローカルで再生させる
       if (playing && now - this.lastPosSend > 1000 / CONFIG.posSendHz) {
         this.lastPosSend = now;
         this.net.set(`rooms/${this.room}/pos/${this.net.clientId}`, {
-          x: this.myMesh.position.x,
-          z: this.myMesh.position.z,
+          x: this.baseX,
+          z: this.baseZ,
           ry: this.myMesh.rotation.y,
           t: Date.now(),
+          hidden: this.respawnAt !== null,
+          sway: swaying,
         } satisfies PosMsg);
       }
     }
@@ -544,15 +590,25 @@ export class Game {
     // リモートプレイヤーの補間（出口脱出→再スポーンなどの大きな移動はワープ）
     for (const r of this.remotes.values()) {
       if (!r.target) continue;
-      const dist = Math.hypot(r.target.x - r.mesh.position.x, r.target.z - r.mesh.position.z);
+      const dist = Math.hypot(r.target.x - r.sx, r.target.z - r.sz);
       if (dist > 4) {
-        r.mesh.position.x = r.target.x;
-        r.mesh.position.z = r.target.z;
+        r.sx = r.target.x;
+        r.sz = r.target.z;
       } else {
         const k = Math.min(1, dt * 12);
-        r.mesh.position.x += (r.target.x - r.mesh.position.x) * k;
-        r.mesh.position.z += (r.target.z - r.mesh.position.z) * k;
+        r.sx += (r.target.x - r.sx) * k;
+        r.sz += (r.target.z - r.sz) * k;
       }
+      // 盗みモーションは補間位置に対してローカルで再生する（自分の表示と同じ円運動）
+      let rox = 0;
+      let roz = 0;
+      if (r.target.sway) {
+        const phase = t * CONFIG.swayHz * Math.PI * 2;
+        rox = Math.cos(phase) * CONFIG.swayAmp;
+        roz = Math.sin(phase) * CONFIG.swayAmp;
+      }
+      r.mesh.position.x = r.sx + rox;
+      r.mesh.position.z = r.sz + roz;
       r.mesh.rotation.y = r.target.ry;
     }
 
@@ -579,8 +635,12 @@ export class Game {
           }
         }
       }
-      // 出口判定: 商品を持って出口を通ると所持金額分のポイント → カメラの死角にリスポーン
-      if (this.myCarrying > 0 && this.world.isInExitZone(this.baseX, this.baseZ)) {
+      // 出口判定: 商品を持って出口を通ると所持金額分のポイント → 一定時間姿を消してからカメラの死角にリスポーン
+      if (
+        this.respawnAt === null &&
+        this.myCarrying > 0 &&
+        this.world.isInExitZone(this.baseX, this.baseZ)
+      ) {
         const value = this.myCarryingValue;
         this.myCarrying = 0;
         this.myCarryingValue = 0;
@@ -591,8 +651,9 @@ export class Game {
           round: this.round,
           at: Date.now(),
         } satisfies GameEvent);
-        this.baseX = this.world.blindSpawn.x;
-        this.baseZ = this.world.blindSpawn.z;
+        this.respawnAt = t + CONFIG.respawnDelaySec;
+        this.myMesh.visible = false;
+        if (this.selfRing) this.selfRing.visible = false;
         this.cancelSteal();
       }
     } else if (this.stealStart !== null) {
@@ -642,9 +703,10 @@ export class Game {
 
   private updateFollowCam(): void {
     if (this.myMesh) {
-      const p = this.myMesh.position;
-      this.followCam.position.set(p.x, p.y + 8, p.z + 7);
-      this.followCam.lookAt(p.x, 0.5, p.z - 1);
+      // 揺れモーション込みの表示位置ではなく実位置(base)を追従する（カメラまで揺れると画面酔いするため）
+      const y = this.myMesh.position.y;
+      this.followCam.position.set(this.baseX, y + 8, this.baseZ + 7);
+      this.followCam.lookAt(this.baseX, 0.5, this.baseZ - 1);
     } else {
       // 観戦者は俯瞰（フロア全体が入る高さ）
       this.followCam.position.set(0, 36, 18);
@@ -664,6 +726,7 @@ export class Game {
   dispose(): void {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
+    clearTimeout(this.advanceTimer);
     for (const u of this.unsubs) u();
     // 攻守交代・ロビー復帰時に自分のカメラ接続状態を消す（次のラウンドは新しい猫が書く）
     if (this.amCat) this.net.remove(`rooms/${this.room}/cams/${this.net.clientId}`);

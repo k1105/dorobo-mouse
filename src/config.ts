@@ -27,6 +27,10 @@ export const CONFIG = {
   posSendHz: 10,
   /** ゲーム開始前カウントダウン（秒） */
   countdownSec: 3,
+  /** 万引き成功（出口通過）からリスポーンまでの待ち時間（秒） */
+  respawnDelaySec: 3,
+  /** ダウト成功演出の表示時間（秒）。この時間が経ってから攻守交代する */
+  doubtEffectSec: 2.5,
 } as const;
 
 export const COLORS = {
@@ -37,6 +41,8 @@ export const COLORS = {
   exit: 0x43a047,
   camera: 0xd32f2f,
   target: 0xffb300,
+  /** ダウト成功時に見破られたプレイヤーが変わる色 */
+  caught: 0x2ecc71,
 } as const;
 
 /** 盗む商品のリスト（値段は円。持ち出しに成功すると値段分がチームスコアに加算される） */

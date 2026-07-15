@@ -50,6 +50,10 @@ export interface PosMsg {
   z: number;
   ry: number;
   t: number;
+  /** リスポーン待ち中は姿を消す（他クライアントは表示しない） */
+  hidden?: boolean;
+  /** 盗みモーション中。受信側が揺れをローカルで再生する（低頻度送信+補間だと揺れが潰れるため） */
+  sway?: boolean;
 }
 
 export type GameEvent =
