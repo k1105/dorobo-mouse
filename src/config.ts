@@ -42,7 +42,10 @@ export const CONFIG = {
 } as const;
 
 export const COLORS = {
+  /** ネズミ（NPC・プレイヤー）の基本色。監視カメラ・観戦視点ではプレイヤーもこの色で、NPCと見分けがつかない */
   mouse: 0x3b72b0,
+  /** 泥棒目線（ネズミ役のクライアント）で見たときの泥棒プレイヤーの色。仲間を見分けるための味方色 */
+  thief: 0xe0453a,
   floor: 0xe8e6e2,
   shelf: 0x161616,
   wall: 0xc5c2bd,

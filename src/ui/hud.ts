@@ -103,10 +103,10 @@ export class Hud {
     this.stealBtn.classList.remove('holding');
   }
 
-  /** ネズミ専用: 視点切替ボタン（追従カメラ ⇔ 一人称）を表示する */
-  showCamToggle(onToggle: () => void): void {
+  /** ネズミ専用: 視点切替ボタン（追従カメラ ⇔ 一人称）を表示する。fps は初期モード */
+  showCamToggle(onToggle: () => void, fps: boolean): void {
     this.camToggleBtn.classList.remove('hidden');
-    this.setCamMode(false);
+    this.setCamMode(fps);
     this.camToggleBtn.onclick = () => {
       // 盗むボタンと同様、フォーカスを残すとSpace/Enterで再発火するため外す
       this.camToggleBtn.blur();

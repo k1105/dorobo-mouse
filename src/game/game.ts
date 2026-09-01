@@ -80,8 +80,8 @@ export class Game {
   private eliminateAt: number | null = null;
   /** ダウトされて退場済み（自分のアバターは消え、俯瞰で観戦中） */
   private eliminated = false;
-  /** 一人称（泥棒目線）カメラモード。HUDのボタンでトグル。ネズミ役のみ */
-  private fpsMode = false;
+  /** 一人称（泥棒目線）カメラモード。ネズミ役のデフォルトで、HUDのボタンで追従カメラとトグル */
+  private fpsMode = true;
   private phase: PhaseState;
   private endSent = false;
   private seenEvents = new Set<string>();
@@ -131,7 +131,7 @@ export class Game {
 
     // 自分のアバター（このラウンドでネズミの場合のみ。猫はカメラ越しに見るだけで店内にいない）
     if (this.amMouse) {
-      this.myMesh = makeCapsule();
+      this.myMesh = makeCapsule(this.playerColor());
       const spawn = this.spawnPos();
       this.baseX = spawn.x;
       this.baseZ = spawn.z;
@@ -140,6 +140,9 @@ export class Game {
       // 初期の向きは店内側(-z)。一人称に切り替えた直後に壁ではなく店内が見えるようにする
       this.myMesh.rotation.y = Math.PI;
       this.scene.add(this.myMesh);
+      // デフォルトは一人称（泥棒目線）なので画角も一人称用にしておく
+      this.followCam.fov = this.fpsMode ? CONFIG.fpsFov : CONFIG.followFov;
+      this.followCam.updateProjectionMatrix();
       // 自分がどのカプセルか分かるように、自分にだけ見えるリングを足元に表示
       this.selfRing = new THREE.Mesh(
         new THREE.RingGeometry(0.5, 0.65, 32),
@@ -154,7 +157,7 @@ export class Game {
     for (const [pid, info] of Object.entries(players)) {
       if (pid === net.clientId) continue;
       if (info.role === 'none' || !isMouseInRound(info.role, this.round)) continue;
-      const mesh = makeCapsule();
+      const mesh = makeCapsule(this.playerColor());
       mesh.visible = false; // 最初の位置情報が来るまで隠す
       this.scene.add(mesh);
       this.remotes.set(pid, { mesh, target: null, sx: 0, sz: 0, caughtUntil: 0 });
@@ -168,7 +171,7 @@ export class Game {
         () => this.tryStartSteal(),
         () => this.cancelSteal(),
       );
-      this.hud.showCamToggle(() => this.toggleFpsMode());
+      this.hud.showCamToggle(() => this.toggleFpsMode(), this.fpsMode);
       // 自分の位置が分かるように、猫側と同じマップを左下に常時表示する
       this.miniMap = new MiniMapView(container, this.world.mapData);
     }
@@ -217,6 +220,15 @@ export class Game {
 
   // ---- 初期化ヘルパ ----
 
+  /**
+   * 泥棒プレイヤー（自分・仲間）のカプセル色。
+   * ネズミ役のクライアント（泥棒目線）では仲間が分かるように赤、
+   * 監視カメラ（猫）や観戦ではNPCと同じ青（見分けがつかないのがゲームの前提）
+   */
+  private playerColor(): number {
+    return this.amMouse ? COLORS.thief : COLORS.mouse;
+  }
+
   private roleLabel(): string {
     if (!this.myTeam) return '観戦';
     return `チーム${this.myTeam}・${this.amMouse ? '🐭 ネズミ' : '🎥 カメラ監視'}`;
@@ -259,7 +271,7 @@ export class Game {
         // リスポーン待ち中のプレイヤーは非表示（ダウトの対象にもならない）。
         // ダウトで緑色にした後、姿を消したタイミングで元の色に戻す（復帰時は普通のネズミに見える）
         r.mesh.visible = !pos.hidden;
-        if (pos.hidden) (r.mesh.material as THREE.MeshStandardMaterial).color.setHex(COLORS.mouse);
+        if (pos.hidden) (r.mesh.material as THREE.MeshStandardMaterial).color.setHex(this.playerColor());
         r.target = pos;
       }
     }
@@ -621,7 +633,7 @@ export class Game {
       this.baseX = this.world.blindSpawn.x;
       this.baseZ = this.world.blindSpawn.z;
       // ダウトで緑色になっていた場合は元の色に戻す
-      (this.myMesh.material as THREE.MeshStandardMaterial).color.setHex(COLORS.mouse);
+      (this.myMesh.material as THREE.MeshStandardMaterial).color.setHex(this.playerColor());
     }
     // ダウト演出中に見えたまま固まる時間。過ぎたら退場（アバターが消えて俯瞰の観戦に切り替わる）
     if (this.myMesh && this.eliminateAt !== null && t >= this.eliminateAt) {
@@ -715,7 +727,7 @@ export class Game {
         mesh.rotation.y = p.ry;
         const mat = mesh.material as THREE.MeshStandardMaterial;
         const flashing = now < this.npcFlashUntil[i];
-        mat.color.setHex(flashing ? 0xff3333 : 0x3b72b0);
+        mat.color.setHex(flashing ? 0xff3333 : COLORS.mouse);
       }
     }
 

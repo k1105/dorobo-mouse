@@ -491,13 +491,13 @@ export function castRay(
   return best;
 }
 
-/** ネズミ用カプセルを作る（プレイヤーとNPCは同一見た目） */
-export function makeCapsule(): THREE.Mesh {
+/** ネズミ用カプセルを作る（プレイヤーとNPCは同一形状。色は視点によって変える） */
+export function makeCapsule(color: number = COLORS.mouse): THREE.Mesh {
   const radius = 0.35;
   const height = 0.7;
   const mesh = new THREE.Mesh(
     new THREE.CapsuleGeometry(radius, height, 6, 16),
-    new THREE.MeshStandardMaterial({ color: COLORS.mouse }),
+    new THREE.MeshStandardMaterial({ color }),
   );
   mesh.position.y = radius + height / 2;
   return mesh;
