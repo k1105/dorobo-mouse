@@ -37,8 +37,8 @@ export const CONFIG = {
   fpsFov: 75,
   /** 一人称カメラの目の高さ（カプセルの頭頂が1.4） */
   fpsEyeHeight: 1.2,
-  /** 一人称カメラが進行方向へ向き直る速さ（大きいほど速い） */
-  fpsTurnSpeed: 8,
+  /** 一人称でA/D・左右キーを押したときの旋回速度（rad/s） */
+  fpsTurnSpeed: 2.5,
 } as const;
 
 export const COLORS = {

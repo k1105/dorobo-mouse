@@ -33,6 +33,17 @@ export class Controls {
     return { x, z };
   }
 
+  /** 一人称用の入力。turn: 右旋回=+1/左旋回=-1、forward: 前進=+1/後退=-1 */
+  fpsInput(): { turn: number; forward: number } {
+    let turn = 0;
+    let forward = 0;
+    if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) forward += 1;
+    if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) forward -= 1;
+    if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) turn -= 1;
+    if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) turn += 1;
+    return { turn, forward };
+  }
+
   dispose(): void {
     window.removeEventListener('keydown', this.kd);
     window.removeEventListener('keyup', this.ku);

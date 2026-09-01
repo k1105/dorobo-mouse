@@ -69,8 +69,6 @@ export class Game {
   private respawnAt: number | null = null;
   /** 一人称（泥棒目線）カメラモード。HUDのボタンでトグル。ネズミ役のみ */
   private fpsMode = false;
-  /** 一人称カメラの現在のヨー角（進行方向へ滑らかに追従させるための補間値） */
-  private fpsYaw = 0;
   /** ダウト成功演出の後にラウンドを送るためのタイマー */
   private advanceTimer = 0;
   private phase: PhaseState;
@@ -543,10 +541,23 @@ export class Game {
 
     // 自分の移動（実位置=base。表示位置は揺れモーションを足す）。リスポーン待ち中は動けない
     if (this.myMesh && playing && this.respawnAt === null) {
-      const mv = this.controls.moveVec();
-      if (mv.x !== 0 || mv.z !== 0) {
-        this.moveWithCollision(mv.x * CONFIG.mouseSpeed * dt, mv.z * CONFIG.mouseSpeed * dt);
-        this.myMesh.rotation.y = Math.atan2(mv.x, mv.z);
+      if (this.fpsMode) {
+        // 一人称: A/D・左右で向きを回し、W/S・上下で向いている方向へ前進/後退
+        const inp = this.controls.fpsInput();
+        // 前方ベクトルは(sin(ry), cos(ry))なので、ryを増やすと左旋回になる
+        this.myMesh.rotation.y -= inp.turn * CONFIG.fpsTurnSpeed * dt;
+        if (inp.forward !== 0) {
+          const fx = Math.sin(this.myMesh.rotation.y);
+          const fz = Math.cos(this.myMesh.rotation.y);
+          const step = inp.forward * CONFIG.mouseSpeed * dt;
+          this.moveWithCollision(fx * step, fz * step);
+        }
+      } else {
+        const mv = this.controls.moveVec();
+        if (mv.x !== 0 || mv.z !== 0) {
+          this.moveWithCollision(mv.x * CONFIG.mouseSpeed * dt, mv.z * CONFIG.mouseSpeed * dt);
+          this.myMesh.rotation.y = Math.atan2(mv.x, mv.z);
+        }
       }
     }
     if (this.myMesh) {
@@ -693,7 +704,7 @@ export class Game {
     if (this.cctv) {
       this.cctv.render(this.renderer, this.scene, this.world.cctvCams);
     } else {
-      this.updateFollowCam(dt);
+      this.updateFollowCam();
       this.renderer.render(this.scene, this.followCam);
     }
   };
@@ -718,21 +729,16 @@ export class Game {
   private toggleFpsMode(): void {
     if (!this.myMesh) return;
     this.fpsMode = !this.fpsMode;
-    // 切替直後にカメラが大きく回らないよう、現在の向きから補間を始める
-    this.fpsYaw = this.myMesh.rotation.y;
     this.followCam.fov = this.fpsMode ? CONFIG.fpsFov : CONFIG.followFov;
     this.followCam.updateProjectionMatrix();
     this.hud.setCamMode(this.fpsMode);
   }
 
-  private updateFollowCam(dt: number): void {
+  private updateFollowCam(): void {
     if (this.myMesh && this.fpsMode) {
-      // 一人称: 目の高さから進行方向を見る。向きは急に振り回されないよう最短角で滑らかに追従
-      let diff = this.myMesh.rotation.y - this.fpsYaw;
-      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
-      this.fpsYaw += diff * Math.min(1, dt * CONFIG.fpsTurnSpeed);
-      const dx = Math.sin(this.fpsYaw);
-      const dz = Math.cos(this.fpsYaw);
+      // 一人称: 目の高さから自分の向き（A/Dで回す）を見る
+      const dx = Math.sin(this.myMesh.rotation.y);
+      const dz = Math.cos(this.myMesh.rotation.y);
       // 揺れモーション込みの表示位置ではなく実位置(base)に置く（カメラまで揺れると画面酔いするため）
       this.followCam.position.set(this.baseX, CONFIG.fpsEyeHeight, this.baseZ);
       this.followCam.lookAt(this.baseX + dx, CONFIG.fpsEyeHeight - 0.15, this.baseZ + dz);
