@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COLORS, ITEMS, type Item } from '../config';
+import { COLORS, ITEMS, priceTierColor, type Item } from '../config';
 import { mulberry32, shuffled } from './rng';
 import { NavGrid } from './nav';
 
@@ -35,6 +35,7 @@ export interface CamInfo {
 /** カメラマップ描画用の棚情報 */
 export interface ShelfDraw {
   rect: Rect;
+  /** 料金帯の色（config.PRICE_TIERS） */
   color: number;
   label: string;
 }
@@ -96,6 +97,7 @@ interface ShelfDef {
   minZ: number;
   maxZ: number;
   h: number;
+  /** 売り場の色（現在は未使用。棚の実際の色は商品の料金帯で決まる） */
   color: number;
   label: string;
   sides: Side[];
@@ -183,17 +185,23 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
   floor.rotation.x = -Math.PI / 2;
   scene.add(floor);
 
-  // 棚・ケース・平台（売り場ごとに色分け）
+  // 棚ごとに商品を1つ割り当てる（同じ棚のスポットはすべて同じ商品）。棚の色は商品の料金帯で決まる
+  const itemRng = mulberry32(seed ^ 0x5e7a11);
+  const itemPool = shuffled(ITEMS, itemRng);
+  const shelfItems: Item[] = SHELVES.map((_, i) => itemPool[i % itemPool.length]);
+  const shelfColors: number[] = shelfItems.map((item) => priceTierColor(item.price));
+
+  // 棚・ケース・平台（料金帯ごとに色分け）
   const decoRng = mulberry32(12345); // 飾りは全クライアント共通の固定seed
   const decoGeo = new THREE.BoxGeometry(0.5, 0.4, 0.4);
-  for (const s of SHELVES) {
+  SHELVES.forEach((s, shelfIdx) => {
     const w = s.maxX - s.minX;
     const d = s.maxZ - s.minZ;
     const cx = (s.minX + s.maxX) / 2;
     const cz = (s.minZ + s.maxZ) / 2;
     const mesh = new THREE.Mesh(
       new THREE.BoxGeometry(w, s.h, d),
-      new THREE.MeshStandardMaterial({ color: s.color }),
+      new THREE.MeshStandardMaterial({ color: shelfColors[shelfIdx] }),
     );
     mesh.position.set(cx, s.h / 2, cz);
     scene.add(mesh);
@@ -221,7 +229,7 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
         scene.add(deco);
       }
     }
-  }
+  });
 
   // 壁（出口の隙間だけ空ける）
   const wallMat = new THREE.MeshStandardMaterial({ color: COLORS.wall });
@@ -267,17 +275,16 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
     scene.add(post);
   }
 
-  // 盗みスポット（棚の各面に沿って約2.8間隔）と商品の割り当て
+  // 盗みスポット（棚の各面に沿って約2.8間隔）。商品はその棚に割り当てたもの
   const spots: Spot[] = [];
-  const itemRng = mulberry32(seed ^ 0x5e7a11);
-  const itemPool = shuffled(ITEMS, itemRng);
   let idx = 0;
-  const addSpot = (x: number, z: number) => {
-    spots.push({ idx, x, z, item: itemPool[idx % itemPool.length] });
-    idx++;
-  };
   const SPOT_OFF = 0.7;
-  for (const s of SHELVES) {
+  SHELVES.forEach((s, shelfIdx) => {
+    const item = shelfItems[shelfIdx];
+    const addSpot = (x: number, z: number) => {
+      spots.push({ idx, x, z, item });
+      idx++;
+    };
     for (const side of s.sides) {
       const horizontal = side === 'n' || side === 's';
       const from = (horizontal ? s.minX : s.minZ) + 1.2;
@@ -289,7 +296,7 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
         else addSpot(s.maxX + SPOT_OFF, p);
       }
     }
-  }
+  });
   // 防犯カメラ12台。赤い球で見える化（球はオンライン時に発光させるため個別マテリアル）
   const cctvCams: THREE.PerspectiveCamera[] = [];
   const camPositions: THREE.Vector3[] = [];
@@ -379,9 +386,9 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
     halfX: FLOOR_HALF_X,
     halfZ: FLOOR_HALF_Z,
     exitHalfW: EXIT_HALF_W,
-    shelves: SHELVES.map((s) => ({
+    shelves: SHELVES.map((s, i) => ({
       rect: { minX: s.minX, maxX: s.maxX, minZ: s.minZ, maxZ: s.maxZ },
-      color: s.color,
+      color: shelfColors[i],
       label: s.label,
     })),
     occluders,

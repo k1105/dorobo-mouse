@@ -16,14 +16,15 @@ interface RemoteAvatar {
   /** 補間済みの実位置（揺れオフセットを含まない）。mesh.positionは表示用でこれに揺れを足す */
   sx: number;
   sz: number;
-  /** ダウトされてリスポーン待ちに入るまでの時刻(performance.now)。この間は再ダウトの対象外 */
+  /** ダウトされて姿を消す（退場する）までの時刻(performance.now)。この間は再ダウトの対象外 */
   caughtUntil: number;
 }
 
 /**
  * 1ラウンド分のゲーム本体。制限時間が経過するとラウンドが終わり、
  * 前半(round=1)はチームAがネズミ、後半(round=2)は攻守交代する。main.tsがラウンドごとに作り直す。
- * ダウト成功ではラウンドは終わらず、見破られたネズミが商品を失って死角にリスポーンする。
+ * ダウト成功ではラウンドは終わらず、見破られたネズミは商品を失ってゲームから退場し、
+ * 観戦者と同じ神様目線（店内全体の俯瞰）でラウンド終了まで見守る。
  */
 export class Game {
   readonly round: Round;
@@ -68,15 +69,17 @@ export class Game {
   /** 盗み中のスポットと開始時刻（ゲーム内時間）。nullなら盗んでいない */
   private stealSpot: Spot | null = null;
   private stealStart: number | null = null;
-  /** デバッグ用隠しコマンド: Sキーでトグル。ONの間は盗みモーション（揺れ）を常時再生する */
-  private debugStealMotion = false;
-  /** 万引き成功・ダウトされた後のリスポーン予定時刻（ゲーム内時間）。nullなら通常状態 */
+  /** 万引き成功（出口通過）後のリスポーン予定時刻（ゲーム内時間）。nullなら通常状態 */
   private respawnAt: number | null = null;
   /**
    * ダウトされた直後は演出のためこの時刻までその場に（緑色で）見えたまま固まり、
-   * その後リスポーン待ちで姿を消す。nullなら通常状態
+   * その後退場する。nullなら通常状態
    */
   private caughtVisibleUntil: number | null = null;
+  /** ダウトされたネズミが退場する時刻（ゲーム内時間）。nullなら通常状態 */
+  private eliminateAt: number | null = null;
+  /** ダウトされて退場済み（自分のアバターは消え、俯瞰で観戦中） */
+  private eliminated = false;
   /** 一人称（泥棒目線）カメラモード。HUDのボタンでトグル。ネズミ役のみ */
   private fpsMode = false;
   private phase: PhaseState;
@@ -160,7 +163,11 @@ export class Game {
     // HUD
     this.hud = new Hud(container, this.roleLabel());
     if (this.amMouse) {
-      this.hud.showStealButton(() => this.tryStartSteal());
+      // 盗みはボタンを押している間だけ進み、離すと中断する
+      this.hud.showStealButton(
+        () => this.tryStartSteal(),
+        () => this.cancelSteal(),
+      );
       this.hud.showCamToggle(() => this.toggleFpsMode());
       // 自分の位置が分かるように、猫側と同じマップを左下に常時表示する
       this.miniMap = new MiniMapView(container, this.world.mapData);
@@ -170,17 +177,28 @@ export class Game {
       this.hud.banner(`後半戦: あなたは${this.amMouse ? '🐭 ネズミ' : '🎥 カメラ監視'}です`, 'info');
     }
 
-    // 猫チームはCCTVビュー（同時オンライン4台まで）とカメラマップ（Mでモーダル表示）
+    // 猫チームはCCTVビュー（同時オンライン4台まで）と、カメラをクリックでオン/オフする操作マップ（画面中央に常時表示、Mで表示切替）
     if (this.amCat) {
-      this.cctv = new CctvView(container, this.world.cctvCams.length, () =>
-        this.camMap?.toggle(),
-      );
-      this.camMap = new CamMapView(container, this.world.mapData);
+      const cctv = new CctvView(container, this.world.cctvCams.length);
+      this.cctv = cctv;
+      const camMap = new CamMapView(container, this.world.mapData, (id) => cctv.toggleCam(id));
+      this.camMap = camMap;
       this.renderer.domElement.style.cursor = 'crosshair';
       this.renderer.domElement.addEventListener('click', this.onCanvasClick);
-      // どのカメラがオンラインかを全クライアントへ共有（球の発光・視野ハイライト用）
-      this.cctv.onChange = () => this.publishCams();
-      this.publishCams();
+      // どのカメラがオンラインかを全クライアントへ共有（球の発光・視野ハイライト用）し、マップにも反映
+      const syncCams = () => {
+        camMap.setOnline(cctv.onlineIds(), CONFIG.maxViewCams);
+        this.publishCams();
+      };
+      cctv.onChange = syncCams;
+      cctv.onDeny = () => {
+        camMap.deny();
+        this.hud.banner(
+          `同時にオンラインにできるのは${CONFIG.maxViewCams}台まで。先にどれかをオフにしてください`,
+          'alert',
+        );
+      };
+      syncCams();
       this.net.onDisconnectRemove(`rooms/${this.room}/cams/${this.net.clientId}`);
     }
 
@@ -325,12 +343,16 @@ export class Game {
           this.myCarrying = 0;
           this.myCarryingValue = 0;
         }
-        if (silent) break;
+        if (silent) {
+          // リロード時のイベント再生: 演出なしで即退場
+          if (isMe) this.eliminate();
+          break;
+        }
         const name = this.players[ev.mouseId]?.name ?? 'ネズミ';
         this.hud.banner(
           isMe
-            ? `🚨 見破られた！商品を没収され、死角にリスポーンします`
-            : `🚨 ダウト成功！${name} が見破られた！`,
+            ? `🚨 見破られた！商品を没収され、退場となります`
+            : `🚨 ダウト成功！${name} が見破られて退場！`,
           'alert',
         );
         // 全画面演出＋見破られたプレイヤーを緑色にして誰が捕まったか見せる
@@ -345,15 +367,53 @@ export class Game {
             performance.now() + (CONFIG.doubtEffectSec + CONFIG.respawnDelaySec) * 1000;
         }
         if (isMe && this.myMesh) {
-          // 演出の間はその場で固まって見えたまま → その後姿を消して死角にリスポーン
+          // 演出の間はその場で固まって見えたまま → その後退場（俯瞰の観戦に切り替わる）
           const t = this.gameTime();
           this.caughtVisibleUntil = t + CONFIG.doubtEffectSec;
-          this.respawnAt = this.caughtVisibleUntil + CONFIG.respawnDelaySec;
+          this.eliminateAt = this.caughtVisibleUntil;
           this.cancelSteal();
         }
         break;
       }
     }
+  }
+
+  /**
+   * ダウトされたネズミの退場処理。自分のアバターを店内から消し（他クライアントには hidden を送る）、
+   * ネズミ用のUIを片付けて、ゲーム途中参加の観戦者と同じ神様目線（店内全体の俯瞰）に切り替える。
+   */
+  private eliminate(): void {
+    if (!this.myMesh || this.eliminated) return;
+    this.eliminated = true;
+    this.eliminateAt = null;
+    this.caughtVisibleUntil = null;
+    this.respawnAt = null;
+    this.cancelSteal();
+    // 最後の位置情報として hidden を送り、他クライアントから姿を消す（以降は送信しない）
+    this.net.set(`rooms/${this.room}/pos/${this.net.clientId}`, {
+      x: this.baseX,
+      z: this.baseZ,
+      ry: this.myMesh.rotation.y,
+      t: Date.now(),
+      hidden: true,
+      sway: false,
+    } satisfies PosMsg);
+    for (const mesh of [this.myMesh, this.selfRing]) {
+      if (!mesh) continue;
+      this.scene.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.myMesh = null;
+    this.selfRing = null;
+    this.miniMap?.dispose();
+    this.miniMap = null;
+    // 一人称だった場合は俯瞰用の画角に戻す
+    this.fpsMode = false;
+    this.followCam.fov = CONFIG.followFov;
+    this.followCam.updateProjectionMatrix();
+    this.hud.hideMouseControls();
+    this.hud.setRole(`チーム${this.myTeam}・👻 退場（観戦）`);
   }
 
   private publishCams(): void {
@@ -435,10 +495,10 @@ export class Game {
 
   // ---- 盗み ----
 
-  /** 盗むボタン: 一番近い商品棚スポットが判定半径内にあれば盗みを開始する */
+  /** 盗むボタンを押した: 一番近い商品棚スポットが判定半径内にあれば盗みを開始する（離すと cancelSteal） */
   private tryStartSteal(): void {
     if (!this.amMouse || !this.myMesh || this.stealStart !== null) return;
-    if (this.respawnAt !== null) return;
+    if (this.respawnAt !== null || this.eliminateAt !== null) return;
     if (this.phase.phase !== 'playing' || (this.phase.round ?? 1) !== this.round) return;
     const t = this.gameTime();
     if (t < 0) return;
@@ -461,11 +521,13 @@ export class Game {
   }
 
   /** 盗みの中断・完了処理（進捗バーとボタン状態を戻す） */
+  /** 盗みの中断（ボタンを離した・棚から離れた・成立した・ダウトされた 等） */
   private cancelSteal(): void {
     this.stealSpot = null;
     this.stealStart = null;
     this.hud.setProgress(null);
     this.hud.setStealActive(false);
+    this.hud.releaseStealButton();
   }
 
   // ---- 入力 ----
@@ -473,14 +535,6 @@ export class Game {
   private onKey(code: string): void {
     if (code === 'KeyM' && this.camMap) {
       this.camMap.toggle();
-      return;
-    }
-    if (code === 'KeyS' && this.amMouse) {
-      this.debugStealMotion = !this.debugStealMotion;
-      this.hud.banner(
-        `デバッグ: 盗みモーション常時再生 ${this.debugStealMotion ? 'ON' : 'OFF'}`,
-        'info',
-      );
       return;
     }
     this.cctv?.handleKey(code);
@@ -528,7 +582,7 @@ export class Game {
           round: this.round,
           at: Date.now(),
         } satisfies GameEvent);
-        // ラウンドは終わらない。見破られたネズミ側が caught イベントを受けてリスポーンする
+        // ラウンドは終わらない。見破られたネズミ側が caught イベントを受けて退場する
         return;
       }
     }
@@ -569,7 +623,10 @@ export class Game {
       // ダウトで緑色になっていた場合は元の色に戻す
       (this.myMesh.material as THREE.MeshStandardMaterial).color.setHex(COLORS.mouse);
     }
-    // ダウト演出中に見えたまま固まる時間。過ぎたら通常のリスポーン待ち（非表示）へ
+    // ダウト演出中に見えたまま固まる時間。過ぎたら退場（アバターが消えて俯瞰の観戦に切り替わる）
+    if (this.myMesh && this.eliminateAt !== null && t >= this.eliminateAt) {
+      this.eliminate();
+    }
     const caughtVisible =
       this.caughtVisibleUntil !== null && t < this.caughtVisibleUntil;
 
@@ -582,8 +639,8 @@ export class Game {
       this.hud.setCenter('');
     }
 
-    // 自分の移動（実位置=base。表示位置は揺れモーションを足す）。リスポーン待ち中は動けない
-    if (this.myMesh && playing && this.respawnAt === null) {
+    // 自分の移動（実位置=base。表示位置は揺れモーションを足す）。リスポーン待ち・ダウト演出中は動けない
+    if (this.myMesh && playing && this.respawnAt === null && this.eliminateAt === null) {
       if (this.fpsMode) {
         // 一人称: A/D・左右で向きを回し、W/S・上下で向いている方向へ前進/後退
         const inp = this.controls.fpsInput();
@@ -606,7 +663,7 @@ export class Game {
     if (this.myMesh) {
       // 盗み中は体を小さな円を描くように揺さぶる（一方向の往復だとカメラの視線と揺れの軸が
       // 一致したとき奥行き方向の動きになって見えないため、XZ両軸に動かす）
-      const swaying = playing && (this.stealStart !== null || this.debugStealMotion);
+      const swaying = playing && this.stealStart !== null;
       let ox = 0;
       let oz = 0;
       if (swaying) {
@@ -738,7 +795,9 @@ export class Game {
     const remain = CONFIG.roundTimeSec - Math.max(0, t);
     this.hud.setTimer(remain);
     this.hud.setScore(this.round, this.scoreA, this.scoreB);
-    if (this.amMouse) {
+    if (this.amMouse && this.eliminated) {
+      this.hud.setInfo(`退場中（観戦） / チームの盗み: ${this.stealCount}`);
+    } else if (this.amMouse) {
       this.hud.setInfo(`盗み: ${this.stealCount} / 所持: ${this.myCarrying}個 (${this.myCarryingValue}円)`);
     } else if (this.amCat) {
       this.hud.setInfo(`ダウト残り: ${this.doubtsLeft()}/${CONFIG.doubtsPerRound}`);
@@ -797,7 +856,7 @@ export class Game {
       this.followCam.position.set(this.baseX, y + 8, this.baseZ + 7);
       this.followCam.lookAt(this.baseX, 0.5, this.baseZ - 1);
     } else {
-      // 観戦者は俯瞰（フロア全体が入る高さ）
+      // 観戦者・退場したネズミは俯瞰（フロア全体が入る高さ）
       this.followCam.position.set(0, 36, 18);
       this.followCam.lookAt(0, 0, 0);
     }

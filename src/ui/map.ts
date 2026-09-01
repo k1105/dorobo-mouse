@@ -18,8 +18,14 @@ interface MapCanvas {
 /**
  * 店内マップを描画したキャンバスを作る。
  * 視野は棚・壁で遮蔽された実効範囲を2Dレイキャストで求めて扇形に描く。赤く塗られていない床が「死角」。
+ * online を渡すと、オンラインのカメラだけ赤い視野で描き、オフラインのカメラは薄い輪郭のみにする（猫の操作用）。
  */
-function drawMap(canvas: HTMLCanvasElement, data: MapData, cssW: number): MapCanvas {
+function drawMap(
+  canvas: HTMLCanvasElement,
+  data: MapData,
+  cssW: number,
+  online?: ReadonlySet<number>,
+): MapCanvas {
   const pad = 0.8;
   const worldW = data.halfX * 2 + pad * 2;
   const worldH = data.halfZ * 2 + pad * 2;
@@ -44,6 +50,7 @@ function drawMap(canvas: HTMLCanvasElement, data: MapData, cssW: number): MapCan
   ctx.fillRect(tx(-data.halfX), tz(-data.halfZ), data.halfX * 2 * scale, data.halfZ * 2 * scale);
 
   // カメラ視野（遮蔽を考慮した扇形）。重なった場所ほど濃くなる
+  const isOn = (id: number) => !online || online.has(id);
   for (const cam of data.cams) {
     const half = ((cam.hfovDeg / 2) * Math.PI) / 180;
     ctx.beginPath();
@@ -54,14 +61,23 @@ function drawMap(canvas: HTMLCanvasElement, data: MapData, cssW: number): MapCan
       ctx.lineTo(tx(cam.x + Math.cos(a) * d), tz(cam.z + Math.sin(a) * d));
     }
     ctx.closePath();
-    ctx.fillStyle = 'rgba(255, 82, 82, 0.16)';
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255, 82, 82, 0.45)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
+    if (isOn(cam.id)) {
+      ctx.fillStyle = 'rgba(255, 82, 82, 0.16)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 82, 82, 0.45)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    } else {
+      // オフライン: 起動したときの視野が分かるよう薄い点線の輪郭だけ描く
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+      ctx.lineWidth = 1;
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
   }
 
-  // 棚（売り場ごとに色分け + ラベル）
+  // 棚（料金帯ごとに色分け + 売り場ラベル）
   for (const s of data.shelves) {
     const w = (s.rect.maxX - s.rect.minX) * scale;
     const h = (s.rect.maxZ - s.rect.minZ) * scale;
@@ -98,53 +114,103 @@ function drawMap(canvas: HTMLCanvasElement, data: MapData, cssW: number): MapCan
   ctx.font = `bold ${fs(9)}px sans-serif`;
   ctx.fillText('出口', tx(0), tz(-data.halfZ) - fs(8));
 
-  // カメラ本体と番号
+  // カメラ本体と番号（猫の操作用マップでは大きく描いてクリックしやすくし、オフラインは灰色にする）
+  const camR = online ? fs(14) : fs(5);
   for (const cam of data.cams) {
     const x = tx(cam.x);
     const y = tz(cam.z);
+    const on = isOn(cam.id);
     ctx.beginPath();
-    ctx.arc(x, y, fs(5), 0, Math.PI * 2);
-    ctx.fillStyle = '#d32f2f';
+    ctx.arc(x, y, camR, 0, Math.PI * 2);
+    ctx.fillStyle = on ? '#d32f2f' : '#5a5f68';
     ctx.fill();
-    ctx.strokeStyle = '#fff';
+    ctx.strokeStyle = on ? '#fff' : '#aaa';
     ctx.lineWidth = 1.5;
     ctx.stroke();
-    ctx.fillStyle = '#fff';
-    ctx.font = `bold ${fs(7)}px sans-serif`;
+    ctx.fillStyle = on ? '#fff' : '#ddd';
+    ctx.font = `bold ${fs(online ? 13 : 7)}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     ctx.fillText(String(cam.id + 1), x, y);
   }
 
   return { canvas, tx, tz, cssW, cssH };
 }
 
+/** カメラマーカーのクリック判定半径（CSSピクセル） */
+const CAM_HIT_R = 20;
+
 /**
- * 猫チーム用のカメラマップ。デフォルトは非表示で、Mキーで画面中央にモーダル表示する。
+ * 猫チーム用のカメラ操作マップ。CCTV画面の中央（4つのモニタの間の空き）に常時表示し、
+ * マップ上のカメラ番号をクリックするとそのカメラをオンライン⇔オフラインする。
+ * オンラインのカメラは赤い視野つき、オフラインは灰色。Mキーで表示/非表示。
  */
 export class CamMapView {
   private root: HTMLDivElement;
+  private canvas: HTMLCanvasElement;
+  private status: HTMLSpanElement;
+  private data: MapData;
+  private map: MapCanvas;
+  private online = new Set<number>();
 
-  constructor(parent: HTMLElement, data: MapData) {
+  constructor(parent: HTMLElement, data: MapData, onCamClick: (camId: number) => void) {
+    this.data = data;
     this.root = document.createElement('div');
-    this.root.className = 'cam-map-modal hidden';
+    this.root.className = 'cam-map';
     this.root.innerHTML = `
-      <div class="cam-map-panel">
-        <div class="cam-map-head">
-          <span>📷 カメラマップ</span>
-          <span class="cam-map-hint">赤=視野 / 無色=死角</span>
-          <button class="btn" id="cam-map-close">閉じる (M)</button>
-        </div>
+      <div class="cam-map-head">
+        <span>📷 カメラ <span class="cam-map-status"></span></span>
+        <span class="cam-map-hint">番号クリックで ON/OFF・赤=視野</span>
       </div>
     `;
-    const panel = this.root.querySelector<HTMLDivElement>('.cam-map-panel')!;
-    const canvas = document.createElement('canvas');
-    panel.appendChild(canvas);
-    this.root.querySelector<HTMLButtonElement>('#cam-map-close')!.onclick = () => this.toggle();
-    // 背景クリックでも閉じる（パネル内クリックは無視）
-    this.root.onclick = (e) => {
-      if (e.target === this.root) this.toggle();
-    };
+    this.status = this.root.querySelector<HTMLSpanElement>('.cam-map-status')!;
+    this.canvas = document.createElement('canvas');
+    this.root.appendChild(this.canvas);
     parent.appendChild(this.root);
-    drawMap(canvas, data, CANVAS_W);
+    this.map = drawMap(this.canvas, data, CANVAS_W, this.online);
+
+    this.canvas.addEventListener('click', (e) => {
+      const id = this.camAt(e);
+      if (id !== null) onCamClick(id);
+    });
+    // カメラの上ではカーソルをポインタにする
+    this.canvas.addEventListener('mousemove', (e) => {
+      this.canvas.style.cursor = this.camAt(e) !== null ? 'pointer' : 'default';
+    });
+  }
+
+  /** オンラインのカメラID一覧を反映して描き直す */
+  setOnline(ids: number[], max: number): void {
+    this.online = new Set(ids);
+    this.map = drawMap(this.canvas, this.data, CANVAS_W, this.online);
+    this.status.textContent = `${ids.length}/${max} ONLINE`;
+  }
+
+  /** 満杯でオンにできなかったときにパネルを揺らして知らせる */
+  deny(): void {
+    this.root.classList.remove('deny');
+    void this.root.offsetWidth; // アニメーション再生のためのリフロー
+    this.root.classList.add('deny');
+  }
+
+  /** クリック位置に一番近いカメラ（判定半径内）のID */
+  private camAt(e: MouseEvent): number | null {
+    const rect = this.canvas.getBoundingClientRect();
+    // CSS上の表示サイズが描画サイズと異なる場合（縮小表示）に備えて換算する
+    const sx = this.map.cssW / rect.width;
+    const sy = this.map.cssH / rect.height;
+    const px = (e.clientX - rect.left) * sx;
+    const py = (e.clientY - rect.top) * sy;
+    let best: number | null = null;
+    let bestD = CAM_HIT_R;
+    for (const cam of this.data.cams) {
+      const d = Math.hypot(this.map.tx(cam.x) - px, this.map.tz(cam.z) - py);
+      if (d < bestD) {
+        bestD = d;
+        best = cam.id;
+      }
+    }
+    return best;
   }
 
   toggle(): void {

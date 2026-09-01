@@ -3,25 +3,60 @@ import { CONFIG } from '../config';
 
 const GRID_COLS = 2;
 const GRID_ROWS = 2;
+/**
+ * モニタのレイアウト。モニタは画面端まで広げ、左右の列の間に画面幅 CENTER_GAP 分の空きを作り、
+ * そこに画面中央のカメラマップ（style.css の .cam-map、幅30vw）を置く。
+ */
+const OUTER_PX = 6; // 画面端の余白
+const ROW_GAP_PX = 6; // 上下のモニタの間
+const CENTER_GAP = 0.32; // 左右のモニタの間（画面幅に対する割合）
+
+/** モニタ1枚の描画範囲（CSSピクセル、左上原点） */
+interface CellRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function cellRect(slot: number, w: number, h: number): CellRect {
+  const col = slot % GRID_COLS;
+  const row = Math.floor(slot / GRID_COLS);
+  const gapX = w * CENTER_GAP;
+  const cw = (w - 2 * OUTER_PX - gapX * (GRID_COLS - 1)) / GRID_COLS;
+  const ch = (h - 2 * OUTER_PX - ROW_GAP_PX * (GRID_ROWS - 1)) / GRID_ROWS;
+  return {
+    x: OUTER_PX + col * (cw + gapX),
+    y: OUTER_PX + row * (ch + ROW_GAP_PX),
+    w: cw,
+    h: ch,
+  };
+}
 
 /**
  * 猫チーム用の防犯カメラビュー。
- * 店内カメラ（12台）の各ボタンはオンライン/オフラインの純粋なトグルで、
+ * 店内カメラ（12台）のオン/オフはカメラマップ（CamMapView）のクリック or 数字キーで切り替える純粋なトグルで、
  * 同時にオンラインにできるのは CONFIG.maxViewCams 台まで（満杯時は先にどれかをオフにする）。
- * オンラインのカメラは2x2グリッドの固定スロットに表示される。
+ * オンラインのカメラは2x2グリッドの固定スロットに表示される（モニタは画面端まで広げ、
+ * 左右の列の間の空きスペースにカメラマップ CamMapView を重ねる）。
  * 映像内のキャラクターをクリックするとダウト（Game側でレイキャスト判定）。
  */
 export class CctvView {
   /** スロットごとのカメラID（オフラインのスロットはnull。位置は固定） */
   slots: (number | null)[] = [];
-  /** オンライン状態が変わったときに呼ばれる（ネットワークへの共有用） */
+  /** オンライン状態が変わったときに呼ばれる（ネットワークへの共有・マップ更新用） */
   onChange: (() => void) | null = null;
+  /** 満杯でオンにできなかったときに呼ばれる */
+  onDeny: ((camId: number) => void) | null = null;
   private overlay: HTMLDivElement;
+  private grid: HTMLDivElement;
   private cells: HTMLDivElement[] = [];
-  private camButtons: HTMLButtonElement[] = [];
   private camCount: number;
+  /** グリッドの余白を最後に計算したときの画面サイズ（リサイズ時のみ更新する） */
+  private lastW = 0;
+  private lastH = 0;
 
-  constructor(parent: HTMLElement, camCount: number, onMapToggle?: () => void) {
+  constructor(parent: HTMLElement, camCount: number) {
     this.camCount = camCount;
     const slotCount = GRID_COLS * GRID_ROWS;
     for (let i = 0; i < slotCount; i++) {
@@ -36,6 +71,7 @@ export class CctvView {
     const grid = document.createElement('div');
     grid.className = 'cctv-grid';
     this.overlay.appendChild(grid);
+    this.grid = grid;
     for (let i = 0; i < slotCount; i++) {
       const cell = document.createElement('div');
       cell.className = 'cctv-cell';
@@ -44,25 +80,6 @@ export class CctvView {
       this.cells.push(cell);
     }
 
-    // 下部バー: カメラのオン/オフトグル + マップボタン
-    const bar = document.createElement('div');
-    bar.className = 'cctv-bar';
-    for (let i = 0; i < camCount; i++) {
-      const b = document.createElement('button');
-      b.className = 'btn cam-switch';
-      b.textContent = `CAM ${i + 1}`;
-      b.onclick = () => this.toggleCam(i);
-      bar.appendChild(b);
-      this.camButtons.push(b);
-    }
-    if (onMapToggle) {
-      const m = document.createElement('button');
-      m.className = 'btn';
-      m.textContent = '🗺 マップ (M)';
-      m.onclick = onMapToggle;
-      bar.appendChild(m);
-    }
-    this.overlay.appendChild(bar);
     this.updateUi();
   }
 
@@ -73,7 +90,7 @@ export class CctvView {
 
   /**
    * オンライン⇔オフラインのトグル。スロット位置は固定で、
-   * 空きがない状態でオンにしようとした場合は拒否（ボタンを振って知らせる）。
+   * 空きがない状態でオンにしようとした場合は拒否（onDenyで知らせる）。
    */
   toggleCam(camId: number): void {
     const at = this.slots.indexOf(camId);
@@ -82,7 +99,7 @@ export class CctvView {
     } else {
       const empty = this.slots.indexOf(null);
       if (empty === -1) {
-        this.denyFeedback(camId);
+        this.onDeny?.(camId);
         return;
       }
       this.slots[empty] = camId;
@@ -102,13 +119,6 @@ export class CctvView {
     }
   }
 
-  private denyFeedback(camId: number): void {
-    const b = this.camButtons[camId];
-    b.classList.remove('deny');
-    void b.offsetWidth; // アニメーション再生のためのリフロー
-    b.classList.add('deny');
-  }
-
   private flashCell(slot: number): void {
     const cell = this.cells[slot];
     cell.classList.remove('flash');
@@ -123,14 +133,11 @@ export class CctvView {
         camId !== null ? `CAM ${camId + 1} ● ONLINE` : 'OFFLINE';
       cell.classList.toggle('offline', camId === null);
     });
-    this.camButtons.forEach((b, i) => {
-      b.classList.toggle('active', this.slots.includes(i));
-    });
   }
 
   /**
    * キャンバス上の座標から、その位置に表示中のカメラとNDC座標を返す（ダウトのレイキャスト用）。
-   * オフラインのスロットや下部バーの上はnull。
+   * オフラインのスロットやモニタの外（余白・マップ）はnull。
    */
   pick(
     px: number,
@@ -139,20 +146,34 @@ export class CctvView {
     h: number,
     cams: THREE.PerspectiveCamera[],
   ): { cam: THREE.PerspectiveCamera; ndc: THREE.Vector2 } | null {
-    const cw = w / GRID_COLS;
-    const ch = h / GRID_ROWS;
-    const col = Math.min(GRID_COLS - 1, Math.floor(px / cw));
-    const row = Math.min(GRID_ROWS - 1, Math.floor(py / ch));
-    const camId = this.slots[row * GRID_COLS + col];
-    if (camId === null) return null;
-    const ndc = new THREE.Vector2(
-      ((px - col * cw) / cw) * 2 - 1,
-      -(((py - row * ch) / ch) * 2 - 1),
-    );
-    return { cam: cams[camId], ndc };
+    for (let i = 0; i < GRID_COLS * GRID_ROWS; i++) {
+      const r = cellRect(i, w, h);
+      if (px < r.x || px >= r.x + r.w || py < r.y || py >= r.y + r.h) continue;
+      const camId = this.slots[i];
+      if (camId === null) return null;
+      const ndc = new THREE.Vector2(
+        ((px - r.x) / r.w) * 2 - 1,
+        -(((py - r.y) / r.h) * 2 - 1),
+      );
+      return { cam: cams[camId], ndc };
+    }
+    return null;
   }
 
-  /** オンラインカメラの映像をscissorで2x2に分割描画。オフラインスロットは暗転 */
+  /** DOMのグリッド（枠線・ラベル）の余白を描画範囲と一致させる */
+  private syncGridLayout(w: number, h: number): void {
+    if (w === this.lastW && h === this.lastH) return;
+    this.lastW = w;
+    this.lastH = h;
+    this.grid.style.padding = `${OUTER_PX}px`;
+    this.grid.style.columnGap = `${w * CENTER_GAP}px`;
+    this.grid.style.rowGap = `${ROW_GAP_PX}px`;
+  }
+
+  /**
+   * オンラインカメラの映像を2x2モニタにscissorで分割描画。
+   * モニタの間は暗い背景、オフラインスロットはさらに暗く塗る
+   */
   render(
     renderer: THREE.WebGLRenderer,
     scene: THREE.Scene,
@@ -160,16 +181,18 @@ export class CctvView {
   ): void {
     const w = renderer.domElement.clientWidth;
     const h = renderer.domElement.clientHeight;
-    const cw = w / GRID_COLS;
-    const ch = h / GRID_ROWS;
+    this.syncGridLayout(w, h);
+    // 全面を背景色で塗ってからモニタを描く
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, w, h);
+    renderer.setClearColor(0x1a1a20);
+    renderer.clear();
     renderer.setScissorTest(true);
     for (let i = 0; i < GRID_COLS * GRID_ROWS; i++) {
-      const col = i % GRID_COLS;
-      const row = Math.floor(i / GRID_COLS);
-      const x = col * cw;
-      const y = h - (row + 1) * ch; // WebGLのビューポートは左下原点
-      renderer.setViewport(x, y, cw, ch);
-      renderer.setScissor(x, y, cw, ch);
+      const r = cellRect(i, w, h);
+      const y = h - (r.y + r.h); // WebGLのビューポートは左下原点
+      renderer.setViewport(r.x, y, r.w, r.h);
+      renderer.setScissor(r.x, y, r.w, r.h);
       const camId = this.slots[i];
       if (camId === null) {
         renderer.setClearColor(0x0d0d12);
@@ -177,7 +200,7 @@ export class CctvView {
         continue;
       }
       const cam = cams[camId];
-      cam.aspect = cw / ch;
+      cam.aspect = r.w / r.h;
       cam.updateProjectionMatrix();
       renderer.render(scene, cam);
     }

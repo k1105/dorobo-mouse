@@ -81,3 +81,19 @@ export const ITEMS: readonly Item[] = [
   { name: 'シリアル', price: 500 },
   { name: 'グミ', price: 120 },
 ] as const;
+
+/**
+ * 料金帯ごとの棚の色。値段が min 以上なら上から順に最初に当てはまる帯になる。
+ * 高い順に 金・銀・銅、安いものは水色。
+ */
+export const PRICE_TIERS: readonly { name: string; min: number; color: number }[] = [
+  { name: '金', min: 500, color: 0xe6b422 },
+  { name: '銀', min: 300, color: 0xbfc5cc },
+  { name: '銅', min: 200, color: 0xcd7f32 },
+  { name: '水色', min: 0, color: 0x7fd4ef },
+] as const;
+
+/** 値段に対応する棚の色を返す */
+export function priceTierColor(price: number): number {
+  return (PRICE_TIERS.find((t) => price >= t.min) ?? PRICE_TIERS[PRICE_TIERS.length - 1]).color;
+}

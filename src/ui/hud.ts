@@ -63,14 +63,44 @@ export class Hud {
     this.infoEl.textContent = text;
   }
 
-  /** ネズミ専用: 盗むボタンを表示する */
-  showStealButton(onSteal: () => void): void {
+  /**
+   * ネズミ専用: 盗むボタンを表示する。
+   * 盗みは「ボタンを押している間だけ」続き、指/マウスを離す（or ボタンの外に出る）と onRelease で中断する。
+   */
+  showStealButton(onHold: () => void, onRelease: () => void): void {
     this.stealBtn.classList.remove('hidden');
-    this.stealBtn.onclick = () => {
-      // フォーカスを残すとSpace/Enterでボタンが再発火して移動キーと干渉するため外す
-      this.stealBtn.blur();
-      onSteal();
+    let holding = false;
+    const release = () => {
+      if (!holding) return;
+      holding = false;
+      this.stealBtn.classList.remove('holding');
+      onRelease();
     };
+    this.stealBtn.onpointerdown = (e) => {
+      if (e.button !== 0) return;
+      e.preventDefault(); // 長押しでのテキスト選択・フォーカス移動を防ぐ
+      holding = true;
+      this.stealBtn.classList.add('holding');
+      // ボタンの外で離してもpointerupを受け取れるようにする
+      try {
+        this.stealBtn.setPointerCapture(e.pointerId);
+      } catch {
+        // 一部環境でpointerIdが無効な場合は捕捉なしで続ける
+      }
+      onHold();
+    };
+    this.stealBtn.onpointerup = release;
+    this.stealBtn.onpointercancel = release;
+    this.stealBtn.onlostpointercapture = release;
+    // クリック確定時のフォーカスを残すとSpace/Enterで再発火して移動キーと干渉するため外す
+    this.stealBtn.onclick = () => this.stealBtn.blur();
+    // 長押しのコンテキストメニュー（タッチ端末）を抑止
+    this.stealBtn.oncontextmenu = (e) => e.preventDefault();
+  }
+
+  /** 盗むボタンを外部から「離した」状態に戻す（盗みが完了・中断されたとき） */
+  releaseStealButton(): void {
+    this.stealBtn.classList.remove('holding');
   }
 
   /** ネズミ専用: 視点切替ボタン（追従カメラ ⇔ 一人称）を表示する */
@@ -90,9 +120,21 @@ export class Hud {
     this.camToggleBtn.classList.toggle('active', fps);
   }
 
-  /** 盗み中はボタンを押せなくする */
+  /** 役割表示を差し替える（退場→観戦など） */
+  setRole(label: string): void {
+    this.roleEl.textContent = label;
+  }
+
+  /** ネズミ用の操作UI（盗むボタン・視点切替・進捗）をまとめて隠す。退場時に使う */
+  hideMouseControls(): void {
+    this.stealBtn.classList.add('hidden');
+    this.camToggleBtn.classList.add('hidden');
+    this.setProgress(null);
+  }
+
+  /** 盗み中（ホールド中）のボタン表示 */
   setStealActive(active: boolean): void {
-    this.stealBtn.disabled = active;
+    this.stealBtn.classList.toggle('stealing', active);
   }
 
   /** 盗み進捗（0..1）。nullで非表示 */
