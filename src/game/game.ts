@@ -8,6 +8,9 @@ import { CctvView } from './cctv';
 import { CamMapView, MiniMapView } from '../ui/map';
 import { createNpcSims, NpcSim } from './npc';
 import { buildWorld, makeCapsule, type Spot, type World } from './world';
+
+/** カメラマップの画面下端からの余白（style.css の .cam-map の bottom と合わせる） */
+const CAM_MAP_BOTTOM_PX = 10;
 import { Hud } from '../ui/hud';
 
 interface RemoteAvatar {
@@ -80,6 +83,10 @@ export class Game {
   private eliminateAt: number | null = null;
   /** ダウトされて退場済み（自分のアバターは消え、俯瞰で観戦中） */
   private eliminated = false;
+  /** このラウンドでダウトされた（退場した）ネズミプレイヤーのID */
+  private caughtMice = new Set<string>();
+  /** 泥棒全員がダウトされたときに、ダウト演出を見せてからラウンドを即終了する時刻（ゲーム内時間） */
+  private allCaughtAt: number | null = null;
   /** 一人称（泥棒目線）カメラモード。ネズミ役のデフォルトで、HUDのボタンで追従カメラとトグル */
   private fpsMode = true;
   private phase: PhaseState;
@@ -194,6 +201,11 @@ export class Game {
         this.publishCams();
       };
       cctv.onChange = syncCams;
+      // モニタは画面上端のHUDバーと画面下端のカメラマップの間の中央に並べる
+      cctv.getReserved = () => ({
+        top: this.hud.topBarBottom(),
+        bottom: camMap.panelHeight() + CAM_MAP_BOTTOM_PX,
+      });
       cctv.onDeny = () => {
         camMap.deny();
         this.hud.banner(
@@ -227,6 +239,13 @@ export class Game {
    */
   private playerColor(): number {
     return this.amMouse ? COLORS.thief : COLORS.mouse;
+  }
+
+  /** このラウンドで店内にいるネズミプレイヤーの人数 */
+  private miceCount(): number {
+    return Object.values(this.players).filter(
+      (p) => p.role !== 'none' && isMouseInRound(p.role, this.round),
+    ).length;
   }
 
   private roleLabel(): string {
@@ -349,6 +368,11 @@ export class Game {
         if (ev.round !== this.round) break;
         // ダウトは成功しても回数を消費する
         if (ev.by === this.net.clientId) this.myDoubtsUsed++;
+        this.caughtMice.add(ev.mouseId);
+        // 泥棒全員が見破られたら、ダウト演出が終わった時点でラウンドを即終了する（後半なら試合終了）
+        if (this.allCaughtAt === null && this.miceCount() > 0 && this.caughtMice.size >= this.miceCount()) {
+          this.allCaughtAt = silent ? this.gameTime() : this.gameTime() + CONFIG.doubtEffectSec;
+        }
         const isMe = ev.mouseId === this.net.clientId;
         // 見破られたネズミは所持中の商品を失う（リロード時のイベント再生でも復元されるよう silent でも実行）
         if (isMe) {
@@ -441,9 +465,15 @@ export class Game {
   private onCams(val: unknown): void {
     const all = (val ?? {}) as Record<string, { ids?: number[] }>;
     const active = new Set<number>();
-    for (const v of Object.values(all)) {
-      for (const id of Object.values(v?.ids ?? {})) active.add(id as number);
+    // 自分以外の猫がオンラインにしているカメラ（カメラマップに「相方が見ている場所」として表示）
+    const others = new Set<number>();
+    for (const [pid, v] of Object.entries(all)) {
+      for (const id of Object.values(v?.ids ?? {})) {
+        active.add(id as number);
+        if (pid !== this.net.clientId) others.add(id as number);
+      }
     }
+    this.camMap?.setOthers(others);
     this.world.camBalls.forEach((ball, i) => {
       const on = active.has(i);
       const mat = ball.material as THREE.MeshStandardMaterial;
@@ -477,7 +507,7 @@ export class Game {
 
   /**
    * ラウンドを終わらせる。前半なら攻守交代して後半へ、後半ならポイント集計で勝敗確定。
-   * 時間切れでのみ呼ばれ、通常はホストが書き込む（楽観的・プロトタイプ想定）。
+   * 時間切れ、または泥棒全員ダウトで呼ばれ、通常はホストが書き込む（楽観的・プロトタイプ想定）。
    */
   private advanceRound(reasonText: string): void {
     if (this.endSent) return;
@@ -547,6 +577,8 @@ export class Game {
   private onKey(code: string): void {
     if (code === 'KeyM' && this.camMap) {
       this.camMap.toggle();
+      // マップの表示/非表示でモニタを置ける帯の高さが変わる
+      this.cctv?.relayout();
       return;
     }
     this.cctv?.handleKey(code);
@@ -819,6 +851,17 @@ export class Game {
     if (playing && remain <= 0 && (this.isHost() || remain <= -2)) {
       this.advanceRound(this.round === 1 ? '前半終了！' : '試合終了！');
     }
+    // 泥棒全員ダウト → 時間を待たずにラウンド即終了（前半なら攻守交代、後半なら試合終了）
+    if (
+      playing &&
+      this.allCaughtAt !== null &&
+      t >= this.allCaughtAt &&
+      (this.isHost() || t >= this.allCaughtAt + 2)
+    ) {
+      this.advanceRound(
+        this.round === 1 ? '泥棒全員ダウト！前半終了！' : '泥棒全員ダウト！試合終了！',
+      );
+    }
 
     // 描画
     if (this.cctv) {
@@ -880,6 +923,7 @@ export class Game {
     this.renderer.setSize(w, h);
     this.followCam.aspect = w / h;
     this.followCam.updateProjectionMatrix();
+    this.cctv?.relayout();
   };
 
   /** リソース解放（Three.js資源・購読・rAF・DOM） */

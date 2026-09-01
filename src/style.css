@@ -409,20 +409,17 @@ body,
   z-index: 4;
   pointer-events: none;
 }
-.cctv-grid {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  grid-template-rows: repeat(2, 1fr);
-  box-sizing: border-box;
-  /* padding / gap は CctvView が描画範囲（モニタの余白）に合わせて設定する */
-}
 .cctv-cell {
-  position: relative;
+  /* 位置・サイズは CctvView が毎フレーム描画範囲（cellRect）に合わせて設定する */
+  position: absolute;
+  box-sizing: border-box;
   border: 2px solid rgba(255, 255, 255, 0.4);
   border-radius: 6px;
   box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5);
+}
+.cctv-cell.hover {
+  border-color: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.7);
 }
 .cctv-cell.offline {
   background: rgba(10, 10, 14, 0.4);
@@ -444,16 +441,16 @@ body,
 @keyframes map-deny {
   0%,
   100% {
-    transform: translate(-50%, -50%);
+    transform: translateX(-50%);
   }
   25% {
-    transform: translate(calc(-50% - 4px), -50%);
+    transform: translateX(calc(-50% - 4px));
   }
   50% {
-    transform: translate(calc(-50% + 4px), -50%);
+    transform: translateX(calc(-50% + 4px));
   }
   75% {
-    transform: translate(calc(-50% - 3px), -50%);
+    transform: translateX(calc(-50% - 3px));
   }
 }
 @keyframes btn-deny {
@@ -502,15 +499,16 @@ body,
   border-radius: 6px;
 }
 
-/* ---- カメラ操作マップ（猫チーム・画面中央のモニタの隙間に常時表示。カメラ番号クリックでON/OFF） ---- */
+/* ---- カメラ操作マップ（猫チーム・画面の一番下に常時表示。カメラ番号クリックでON/OFF） ---- */
 .cam-map {
   position: absolute;
   left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
-  z-index: 20;
-  /* 左右のモニタの間の空き（画面幅の32%）に収める */
-  width: 30vw;
+  /* bottom は game.ts の CAM_MAP_BOTTOM_PX と合わせる */
+  bottom: 10px;
+  transform: translateX(-50%);
+  /* HUD（z-index 5: バナー・ダウト演出・勝敗表示）より下に置く */
+  z-index: 4;
+  width: max-content;
   background: rgba(18, 18, 24, 0.92);
   border: 1px solid #444;
   border-radius: 12px;
@@ -540,11 +538,14 @@ body,
   color: #999;
   white-space: nowrap;
 }
+.cam-map-mine {
+  color: #ff5252;
+}
+.cam-map-others {
+  color: #5fb3ff;
+}
 .cam-map canvas {
   display: block;
   margin: 0 8px 8px;
   border-radius: 6px;
-  /* パネル幅に合わせて縮小表示（クリック判定は CamMapView 側で換算） */
-  width: calc(100% - 16px) !important;
-  height: auto !important;
 }

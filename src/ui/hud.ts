@@ -114,6 +114,12 @@ export class Hud {
     };
   }
 
+  /** 上部バー（役割・タイマー・スコア）の下端のY（CSSピクセル）。CCTVのモニタ配置が上側の余白として使う */
+  topBarBottom(): number {
+    const bar = this.root.querySelector<HTMLDivElement>('.hud-top')!;
+    return bar.offsetTop + bar.offsetHeight;
+  }
+
   /** 視点切替ボタンの表示を現在のモードに合わせる */
   setCamMode(fps: boolean): void {
     this.camToggleBtn.textContent = fps ? '👁 視点: 一人称' : '🎥 視点: 追従';

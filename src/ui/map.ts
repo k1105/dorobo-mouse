@@ -15,16 +15,25 @@ interface MapCanvas {
   cssH: number;
 }
 
+/** 猫の操作用マップで、誰がどのカメラをオンラインにしているか */
+interface CamOnline {
+  /** 自分がオンラインにしているカメラ（赤で描く） */
+  mine: ReadonlySet<number>;
+  /** 相方（他の猫プレイヤー）がオンラインにしているカメラ（青で描く） */
+  others: ReadonlySet<number>;
+}
+
 /**
  * 店内マップを描画したキャンバスを作る。
- * 視野は棚・壁で遮蔽された実効範囲を2Dレイキャストで求めて扇形に描く。赤く塗られていない床が「死角」。
- * online を渡すと、オンラインのカメラだけ赤い視野で描き、オフラインのカメラは薄い輪郭のみにする（猫の操作用）。
+ * 視野は棚・壁で遮蔽された実効範囲を2Dレイキャストで求めて扇形に描く。塗られていない床が「死角」。
+ * online を渡すと、自分がオンラインにしたカメラを赤、相方がオンラインにしたカメラを青の視野で描き、
+ * 誰もオンにしていないカメラは薄い輪郭のみにする（猫の操作用）。
  */
 function drawMap(
   canvas: HTMLCanvasElement,
   data: MapData,
   cssW: number,
-  online?: ReadonlySet<number>,
+  online?: CamOnline,
 ): MapCanvas {
   const pad = 0.8;
   const worldW = data.halfX * 2 + pad * 2;
@@ -50,7 +59,9 @@ function drawMap(
   ctx.fillRect(tx(-data.halfX), tz(-data.halfZ), data.halfX * 2 * scale, data.halfZ * 2 * scale);
 
   // カメラ視野（遮蔽を考慮した扇形）。重なった場所ほど濃くなる
-  const isOn = (id: number) => !online || online.has(id);
+  const isMine = (id: number) => !online || online.mine.has(id);
+  const isOthers = (id: number) => !!online && online.others.has(id);
+  const isOn = (id: number) => isMine(id) || isOthers(id);
   for (const cam of data.cams) {
     const half = ((cam.hfovDeg / 2) * Math.PI) / 180;
     ctx.beginPath();
@@ -62,11 +73,21 @@ function drawMap(
     }
     ctx.closePath();
     if (isOn(cam.id)) {
-      ctx.fillStyle = 'rgba(255, 82, 82, 0.16)';
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(255, 82, 82, 0.45)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
+      // 相方が見ている視野は青、自分の視野は赤。両方オンなら重ねて描く
+      if (isOthers(cam.id)) {
+        ctx.fillStyle = 'rgba(80, 170, 255, 0.16)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(80, 170, 255, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      if (isMine(cam.id)) {
+        ctx.fillStyle = 'rgba(255, 82, 82, 0.16)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 82, 82, 0.45)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
     } else {
       // オフライン: 起動したときの視野が分かるよう薄い点線の輪郭だけ描く
       ctx.setLineDash([3, 3]);
@@ -114,15 +135,24 @@ function drawMap(
   ctx.font = `bold ${fs(9)}px sans-serif`;
   ctx.fillText('出口', tx(0), tz(-data.halfZ) - fs(8));
 
-  // カメラ本体と番号（猫の操作用マップでは大きく描いてクリックしやすくし、オフラインは灰色にする）
+  // カメラ本体と番号（猫の操作用マップでは大きく描いてクリックしやすくし、オフラインは灰色にする）。
+  // 自分がオンにしたカメラは赤、相方だけがオンにしたカメラは青、両方なら赤い本体に青いリング
   const camR = online ? fs(14) : fs(5);
   for (const cam of data.cams) {
     const x = tx(cam.x);
     const y = tz(cam.z);
     const on = isOn(cam.id);
+    const mine = isMine(cam.id);
+    const others = isOthers(cam.id);
+    if (mine && others) {
+      ctx.beginPath();
+      ctx.arc(x, y, camR + 4, 0, Math.PI * 2);
+      ctx.fillStyle = '#3d9be9';
+      ctx.fill();
+    }
     ctx.beginPath();
     ctx.arc(x, y, camR, 0, Math.PI * 2);
-    ctx.fillStyle = on ? '#d32f2f' : '#5a5f68';
+    ctx.fillStyle = mine ? '#d32f2f' : others ? '#3d9be9' : '#5a5f68';
     ctx.fill();
     ctx.strokeStyle = on ? '#fff' : '#aaa';
     ctx.lineWidth = 1.5;
@@ -141,9 +171,10 @@ function drawMap(
 const CAM_HIT_R = 20;
 
 /**
- * 猫チーム用のカメラ操作マップ。CCTV画面の中央（4つのモニタの間の空き）に常時表示し、
+ * 猫チーム用のカメラ操作マップ。CCTV画面の一番下に常時表示し、
  * マップ上のカメラ番号をクリックするとそのカメラをオンライン⇔オフラインする。
- * オンラインのカメラは赤い視野つき、オフラインは灰色。Mキーで表示/非表示。
+ * 自分がオンにしたカメラは赤い視野、相方（他の猫）がオンにしたカメラは青い視野、オフラインは灰色。
+ * Mキーで表示/非表示。
  */
 export class CamMapView {
   private root: HTMLDivElement;
@@ -152,6 +183,7 @@ export class CamMapView {
   private data: MapData;
   private map: MapCanvas;
   private online = new Set<number>();
+  private others = new Set<number>();
 
   constructor(parent: HTMLElement, data: MapData, onCamClick: (camId: number) => void) {
     this.data = data;
@@ -160,14 +192,14 @@ export class CamMapView {
     this.root.innerHTML = `
       <div class="cam-map-head">
         <span>📷 カメラ <span class="cam-map-status"></span></span>
-        <span class="cam-map-hint">番号クリックで ON/OFF・赤=視野</span>
+        <span class="cam-map-hint">番号クリックで ON/OFF・<span class="cam-map-mine">赤=自分</span>・<span class="cam-map-others">青=相方</span>の視野</span>
       </div>
     `;
     this.status = this.root.querySelector<HTMLSpanElement>('.cam-map-status')!;
     this.canvas = document.createElement('canvas');
     this.root.appendChild(this.canvas);
     parent.appendChild(this.root);
-    this.map = drawMap(this.canvas, data, CANVAS_W, this.online);
+    this.map = this.redraw();
 
     this.canvas.addEventListener('click', (e) => {
       const id = this.camAt(e);
@@ -179,11 +211,27 @@ export class CamMapView {
     });
   }
 
-  /** オンラインのカメラID一覧を反映して描き直す */
+  private redraw(): MapCanvas {
+    return drawMap(this.canvas, this.data, CANVAS_W, { mine: this.online, others: this.others });
+  }
+
+  /** パネルの表示高さ（CSSピクセル）。非表示なら0。CCTVのモニタ配置が下側の余白として使う */
+  panelHeight(): number {
+    return this.root.offsetHeight;
+  }
+
+  /** 自分がオンラインにしているカメラID一覧を反映して描き直す */
   setOnline(ids: number[], max: number): void {
     this.online = new Set(ids);
-    this.map = drawMap(this.canvas, this.data, CANVAS_W, this.online);
+    this.map = this.redraw();
     this.status.textContent = `${ids.length}/${max} ONLINE`;
+  }
+
+  /** 相方（他の猫プレイヤー）がオンラインにしているカメラを反映して描き直す */
+  setOthers(ids: ReadonlySet<number>): void {
+    if (ids.size === this.others.size && [...ids].every((id) => this.others.has(id))) return;
+    this.others = new Set(ids);
+    this.map = this.redraw();
   }
 
   /** 満杯でオンにできなかったときにパネルを揺らして知らせる */
