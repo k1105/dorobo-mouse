@@ -5,7 +5,7 @@ import type { GameEvent, PhaseState, PlayerInfo, PosMsg, Role, Round, Team } fro
 import { isMouseInRound, teamOf } from '../types';
 import { Controls } from './controls';
 import { CctvView } from './cctv';
-import { CamMapView } from '../ui/map';
+import { CamMapView, MiniMapView } from '../ui/map';
 import { createNpcSims, NpcSim } from './npc';
 import { buildWorld, makeCapsule, type Spot, type World } from './world';
 import { Hud } from '../ui/hud';
@@ -16,11 +16,14 @@ interface RemoteAvatar {
   /** 補間済みの実位置（揺れオフセットを含まない）。mesh.positionは表示用でこれに揺れを足す */
   sx: number;
   sz: number;
+  /** ダウトされてリスポーン待ちに入るまでの時刻(performance.now)。この間は再ダウトの対象外 */
+  caughtUntil: number;
 }
 
 /**
- * 1ラウンド分のゲーム本体。1分経過または ダウト成功でラウンドが終わり、
+ * 1ラウンド分のゲーム本体。制限時間が経過するとラウンドが終わり、
  * 前半(round=1)はチームAがネズミ、後半(round=2)は攻守交代する。main.tsがラウンドごとに作り直す。
+ * ダウト成功ではラウンドは終わらず、見破られたネズミが商品を失って死角にリスポーンする。
  */
 export class Game {
   readonly round: Round;
@@ -41,6 +44,8 @@ export class Game {
   private hud: Hud;
   private cctv: CctvView | null = null;
   private camMap: CamMapView | null = null;
+  /** ネズミ用の常時表示ミニマップ（左下）。猫のカメラマップと同じ図に自分の位置を重ねる */
+  private miniMap: MiniMapView | null = null;
   private raycaster = new THREE.Raycaster();
 
   private myMesh: THREE.Mesh | null = null;
@@ -65,12 +70,15 @@ export class Game {
   private stealStart: number | null = null;
   /** デバッグ用隠しコマンド: Sキーでトグル。ONの間は盗みモーション（揺れ）を常時再生する */
   private debugStealMotion = false;
-  /** 万引き成功後のリスポーン予定時刻（ゲーム内時間）。nullなら通常状態 */
+  /** 万引き成功・ダウトされた後のリスポーン予定時刻（ゲーム内時間）。nullなら通常状態 */
   private respawnAt: number | null = null;
+  /**
+   * ダウトされた直後は演出のためこの時刻までその場に（緑色で）見えたまま固まり、
+   * その後リスポーン待ちで姿を消す。nullなら通常状態
+   */
+  private caughtVisibleUntil: number | null = null;
   /** 一人称（泥棒目線）カメラモード。HUDのボタンでトグル。ネズミ役のみ */
   private fpsMode = false;
-  /** ダウト成功演出の後にラウンドを送るためのタイマー */
-  private advanceTimer = 0;
   private phase: PhaseState;
   private endSent = false;
   private seenEvents = new Set<string>();
@@ -146,7 +154,7 @@ export class Game {
       const mesh = makeCapsule();
       mesh.visible = false; // 最初の位置情報が来るまで隠す
       this.scene.add(mesh);
-      this.remotes.set(pid, { mesh, target: null, sx: 0, sz: 0 });
+      this.remotes.set(pid, { mesh, target: null, sx: 0, sz: 0, caughtUntil: 0 });
     }
 
     // HUD
@@ -154,6 +162,8 @@ export class Game {
     if (this.amMouse) {
       this.hud.showStealButton(() => this.tryStartSteal());
       this.hud.showCamToggle(() => this.toggleFpsMode());
+      // 自分の位置が分かるように、猫側と同じマップを左下に常時表示する
+      this.miniMap = new MiniMapView(container, this.world.mapData);
     }
     if (phase.note) this.hud.banner(phase.note, 'info');
     if (this.round === 2 && this.myTeam) {
@@ -228,8 +238,10 @@ export class Game {
           r.mesh.position.x = pos.x;
           r.mesh.position.z = pos.z;
         }
-        // リスポーン待ち中のプレイヤーは非表示（ダウトの対象にもならない）
+        // リスポーン待ち中のプレイヤーは非表示（ダウトの対象にもならない）。
+        // ダウトで緑色にした後、姿を消したタイミングで元の色に戻す（復帰時は普通のネズミに見える）
         r.mesh.visible = !pos.hidden;
+        if (pos.hidden) (r.mesh.material as THREE.MeshStandardMaterial).color.setHex(COLORS.mouse);
         r.target = pos;
       }
     }
@@ -303,19 +315,44 @@ export class Game {
           }
         }
         break;
-      case 'caught':
-        if (!silent) {
-          const name = this.players[ev.mouseId]?.name ?? 'ネズミ';
-          this.hud.banner(`🚨 ダウト成功！${name} が見破られた！`, 'alert');
-          // 全画面演出＋見破られたプレイヤーを緑色にして誰が捕まったか見せる
-          this.hud.showBigText('ダウト成功！', CONFIG.doubtEffectSec * 1000);
-          const mesh =
-            ev.mouseId === this.net.clientId ? this.myMesh : this.remotes.get(ev.mouseId)?.mesh;
-          if (mesh) {
-            (mesh.material as THREE.MeshStandardMaterial).color.setHex(COLORS.caught);
-          }
+      case 'caught': {
+        if (ev.round !== this.round) break;
+        // ダウトは成功しても回数を消費する
+        if (ev.by === this.net.clientId) this.myDoubtsUsed++;
+        const isMe = ev.mouseId === this.net.clientId;
+        // 見破られたネズミは所持中の商品を失う（リロード時のイベント再生でも復元されるよう silent でも実行）
+        if (isMe) {
+          this.myCarrying = 0;
+          this.myCarryingValue = 0;
+        }
+        if (silent) break;
+        const name = this.players[ev.mouseId]?.name ?? 'ネズミ';
+        this.hud.banner(
+          isMe
+            ? `🚨 見破られた！商品を没収され、死角にリスポーンします`
+            : `🚨 ダウト成功！${name} が見破られた！`,
+          'alert',
+        );
+        // 全画面演出＋見破られたプレイヤーを緑色にして誰が捕まったか見せる
+        this.hud.showBigText('ダウト成功！', CONFIG.doubtEffectSec * 1000);
+        const remote = this.remotes.get(ev.mouseId);
+        const mesh = isMe ? this.myMesh : remote?.mesh;
+        if (mesh) {
+          (mesh.material as THREE.MeshStandardMaterial).color.setHex(COLORS.caught);
+        }
+        if (remote) {
+          remote.caughtUntil =
+            performance.now() + (CONFIG.doubtEffectSec + CONFIG.respawnDelaySec) * 1000;
+        }
+        if (isMe && this.myMesh) {
+          // 演出の間はその場で固まって見えたまま → その後姿を消して死角にリスポーン
+          const t = this.gameTime();
+          this.caughtVisibleUntil = t + CONFIG.doubtEffectSec;
+          this.respawnAt = this.caughtVisibleUntil + CONFIG.respawnDelaySec;
+          this.cancelSteal();
         }
         break;
+      }
     }
   }
 
@@ -368,7 +405,7 @@ export class Game {
 
   /**
    * ラウンドを終わらせる。前半なら攻守交代して後半へ、後半ならポイント集計で勝敗確定。
-   * 時間切れはホスト、ダウト成功は当てた猫が書き込む（楽観的・プロトタイプ想定）。
+   * 時間切れでのみ呼ばれ、通常はホストが書き込む（楽観的・プロトタイプ想定）。
    */
   private advanceRound(reasonText: string): void {
     if (this.endSent) return;
@@ -470,7 +507,11 @@ export class Game {
     if (!pick) return;
     this.raycaster.setFromCamera(pick.ndc, pick.cam);
     const targets: THREE.Object3D[] = [...this.npcMeshes];
-    for (const r of this.remotes.values()) if (r.mesh.visible) targets.push(r.mesh);
+    // すでに見破られて消えるのを待っているネズミは対象外（二重ダウト防止）
+    const now = performance.now();
+    for (const r of this.remotes.values()) {
+      if (r.mesh.visible && now >= r.caughtUntil) targets.push(r.mesh);
+    }
     const hits = this.raycaster.intersectObjects(targets, false);
     if (hits.length === 0) return;
     if (this.doubtsLeft() <= 0) {
@@ -487,11 +528,7 @@ export class Game {
           round: this.round,
           at: Date.now(),
         } satisfies GameEvent);
-        const name = this.players[pid]?.name ?? 'ネズミ';
-        // 全画面演出を見せてから攻守交代する
-        this.advanceTimer = window.setTimeout(() => {
-          if (!this.disposed) this.advanceRound(`ダウト成功！${name} を見破った！`);
-        }, CONFIG.doubtEffectSec * 1000);
+        // ラウンドは終わらない。見破られたネズミ側が caught イベントを受けてリスポーンする
         return;
       }
     }
@@ -526,14 +563,20 @@ export class Game {
     // 万引き成功後のリスポーン（待ち時間が明けたら死角に出現）
     if (this.myMesh && playing && this.respawnAt !== null && t >= this.respawnAt) {
       this.respawnAt = null;
+      this.caughtVisibleUntil = null;
       this.baseX = this.world.blindSpawn.x;
       this.baseZ = this.world.blindSpawn.z;
+      // ダウトで緑色になっていた場合は元の色に戻す
+      (this.myMesh.material as THREE.MeshStandardMaterial).color.setHex(COLORS.mouse);
     }
+    // ダウト演出中に見えたまま固まる時間。過ぎたら通常のリスポーン待ち（非表示）へ
+    const caughtVisible =
+      this.caughtVisibleUntil !== null && t < this.caughtVisibleUntil;
 
     // 開始前カウントダウン／リスポーン待ちの残り秒数
     if (this.phase.phase === 'playing' && t < 0) {
       this.hud.setCenter(String(Math.ceil(-t)));
-    } else if (playing && this.respawnAt !== null) {
+    } else if (playing && this.respawnAt !== null && !caughtVisible) {
       this.hud.setCenter(`復帰まで ${Math.ceil(this.respawnAt - t)}秒`, true);
     } else {
       this.hud.setCenter('');
@@ -582,20 +625,26 @@ export class Game {
           z: this.baseZ,
           ry: this.myMesh.rotation.y,
           t: Date.now(),
-          hidden: this.respawnAt !== null,
+          hidden: this.respawnAt !== null && !caughtVisible,
           sway: swaying,
         } satisfies PosMsg);
       }
     }
     if (this.myMesh) {
-      // リスポーン待ち中は非表示。一人称モード中も自分のカプセルが視界を塞ぐので隠す
-      const visible = this.respawnAt === null && !this.fpsMode;
+      // リスポーン待ち中は非表示（ダウト演出中は見えたまま）。一人称モード中も自分のカプセルが視界を塞ぐので隠す
+      const visible = (this.respawnAt === null || caughtVisible) && !this.fpsMode;
       this.myMesh.visible = visible;
       if (this.selfRing) {
         this.selfRing.visible = visible;
         this.selfRing.position.x = this.myMesh.position.x;
         this.selfRing.position.z = this.myMesh.position.z;
       }
+      this.miniMap?.update(
+        this.baseX,
+        this.baseZ,
+        this.myMesh.rotation.y,
+        this.respawnAt !== null && !caughtVisible,
+      );
     }
 
     // NPC（カウントダウン中は開始時点の配置で立たせておく）
@@ -766,7 +815,6 @@ export class Game {
   dispose(): void {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
-    clearTimeout(this.advanceTimer);
     for (const u of this.unsubs) u();
     // 攻守交代・ロビー復帰時に自分のカメラ接続状態を消す（次のラウンドは新しい猫が書く）
     if (this.amCat) this.net.remove(`rooms/${this.room}/cams/${this.net.clientId}`);
@@ -774,6 +822,7 @@ export class Game {
     this.hud.dispose();
     this.cctv?.dispose();
     this.camMap?.dispose();
+    this.miniMap?.dispose();
     this.renderer.domElement.removeEventListener('click', this.onCanvasClick);
     window.removeEventListener('resize', this.onResize);
     this.scene.traverse((obj) => {

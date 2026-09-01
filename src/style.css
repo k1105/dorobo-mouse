@@ -470,6 +470,23 @@ body,
   pointer-events: auto;
 }
 
+/* ---- ミニマップ（ネズミ・左下常時表示） ---- */
+.mini-map {
+  position: absolute;
+  left: 16px;
+  bottom: 16px;
+  background: rgba(18, 18, 24, 0.85);
+  border: 1px solid #444;
+  border-radius: 10px;
+  padding: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+}
+.mini-map canvas {
+  display: block;
+  border-radius: 6px;
+}
+
 /* ---- カメラマップ（猫チーム・中央モーダル） ---- */
 .cam-map-modal {
   position: absolute;
