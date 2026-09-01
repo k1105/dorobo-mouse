@@ -35,7 +35,7 @@ export class Game {
 
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
-  private followCam = new THREE.PerspectiveCamera(60, 1, 0.1, 200);
+  private followCam = new THREE.PerspectiveCamera(CONFIG.followFov, 1, 0.1, 200);
   private world: World;
   private controls = new Controls();
   private hud: Hud;
@@ -67,6 +67,10 @@ export class Game {
   private debugStealMotion = false;
   /** 万引き成功後のリスポーン予定時刻（ゲーム内時間）。nullなら通常状態 */
   private respawnAt: number | null = null;
+  /** 一人称（泥棒目線）カメラモード。HUDのボタンでトグル。ネズミ役のみ */
+  private fpsMode = false;
+  /** 一人称カメラの現在のヨー角（進行方向へ滑らかに追従させるための補間値） */
+  private fpsYaw = 0;
   /** ダウト成功演出の後にラウンドを送るためのタイマー */
   private advanceTimer = 0;
   private phase: PhaseState;
@@ -124,6 +128,8 @@ export class Game {
       this.baseZ = spawn.z;
       this.myMesh.position.x = spawn.x;
       this.myMesh.position.z = spawn.z;
+      // 初期の向きは店内側(-z)。一人称に切り替えた直後に壁ではなく店内が見えるようにする
+      this.myMesh.rotation.y = Math.PI;
       this.scene.add(this.myMesh);
       // 自分がどのカプセルか分かるように、自分にだけ見えるリングを足元に表示
       this.selfRing = new THREE.Mesh(
@@ -147,7 +153,10 @@ export class Game {
 
     // HUD
     this.hud = new Hud(container, this.roleLabel());
-    if (this.amMouse) this.hud.showStealButton(() => this.tryStartSteal());
+    if (this.amMouse) {
+      this.hud.showStealButton(() => this.tryStartSteal());
+      this.hud.showCamToggle(() => this.toggleFpsMode());
+    }
     if (phase.note) this.hud.banner(phase.note, 'info');
     if (this.round === 2 && this.myTeam) {
       this.hud.banner(`後半戦: あなたは${this.amMouse ? '🐭 ネズミ' : '🎥 カメラ監視'}です`, 'info');
@@ -276,6 +285,8 @@ export class Game {
               : `チーム${team}が${ev.value}円分を獲得！`,
             'info',
           );
+          // ダウト成功と同じ全画面演出で万引き成功を大きく見せる
+          this.hud.showBigText('万引き成功！', CONFIG.doubtEffectSec * 1000);
         }
         break;
       }
@@ -299,7 +310,7 @@ export class Game {
           const name = this.players[ev.mouseId]?.name ?? 'ネズミ';
           this.hud.banner(`🚨 ダウト成功！${name} が見破られた！`, 'alert');
           // 全画面演出＋見破られたプレイヤーを緑色にして誰が捕まったか見せる
-          this.hud.showDoubtSuccess(CONFIG.doubtEffectSec * 1000);
+          this.hud.showBigText('ダウト成功！', CONFIG.doubtEffectSec * 1000);
           const mesh =
             ev.mouseId === this.net.clientId ? this.myMesh : this.remotes.get(ev.mouseId)?.mesh;
           if (mesh) {
@@ -519,8 +530,6 @@ export class Game {
       this.respawnAt = null;
       this.baseX = this.world.blindSpawn.x;
       this.baseZ = this.world.blindSpawn.z;
-      this.myMesh.visible = true;
-      if (this.selfRing) this.selfRing.visible = true;
     }
 
     // 開始前カウントダウン／リスポーン待ちの残り秒数
@@ -567,9 +576,15 @@ export class Game {
         } satisfies PosMsg);
       }
     }
-    if (this.myMesh && this.selfRing) {
-      this.selfRing.position.x = this.myMesh.position.x;
-      this.selfRing.position.z = this.myMesh.position.z;
+    if (this.myMesh) {
+      // リスポーン待ち中は非表示。一人称モード中も自分のカプセルが視界を塞ぐので隠す
+      const visible = this.respawnAt === null && !this.fpsMode;
+      this.myMesh.visible = visible;
+      if (this.selfRing) {
+        this.selfRing.visible = visible;
+        this.selfRing.position.x = this.myMesh.position.x;
+        this.selfRing.position.z = this.myMesh.position.z;
+      }
     }
 
     // NPC（カウントダウン中は開始時点の配置で立たせておく）
@@ -652,8 +667,6 @@ export class Game {
           at: Date.now(),
         } satisfies GameEvent);
         this.respawnAt = t + CONFIG.respawnDelaySec;
-        this.myMesh.visible = false;
-        if (this.selfRing) this.selfRing.visible = false;
         this.cancelSteal();
       }
     } else if (this.stealStart !== null) {
@@ -680,7 +693,7 @@ export class Game {
     if (this.cctv) {
       this.cctv.render(this.renderer, this.scene, this.world.cctvCams);
     } else {
-      this.updateFollowCam();
+      this.updateFollowCam(dt);
       this.renderer.render(this.scene, this.followCam);
     }
   };
@@ -701,8 +714,29 @@ export class Game {
     this.baseZ = Math.min(b.maxZ, Math.max(b.minZ, z));
   }
 
-  private updateFollowCam(): void {
-    if (this.myMesh) {
+  /** 視点切替ボタン: 追従カメラ ⇔ 一人称（泥棒目線） */
+  private toggleFpsMode(): void {
+    if (!this.myMesh) return;
+    this.fpsMode = !this.fpsMode;
+    // 切替直後にカメラが大きく回らないよう、現在の向きから補間を始める
+    this.fpsYaw = this.myMesh.rotation.y;
+    this.followCam.fov = this.fpsMode ? CONFIG.fpsFov : CONFIG.followFov;
+    this.followCam.updateProjectionMatrix();
+    this.hud.setCamMode(this.fpsMode);
+  }
+
+  private updateFollowCam(dt: number): void {
+    if (this.myMesh && this.fpsMode) {
+      // 一人称: 目の高さから進行方向を見る。向きは急に振り回されないよう最短角で滑らかに追従
+      let diff = this.myMesh.rotation.y - this.fpsYaw;
+      diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+      this.fpsYaw += diff * Math.min(1, dt * CONFIG.fpsTurnSpeed);
+      const dx = Math.sin(this.fpsYaw);
+      const dz = Math.cos(this.fpsYaw);
+      // 揺れモーション込みの表示位置ではなく実位置(base)に置く（カメラまで揺れると画面酔いするため）
+      this.followCam.position.set(this.baseX, CONFIG.fpsEyeHeight, this.baseZ);
+      this.followCam.lookAt(this.baseX + dx, CONFIG.fpsEyeHeight - 0.15, this.baseZ + dz);
+    } else if (this.myMesh) {
       // 揺れモーション込みの表示位置ではなく実位置(base)を追従する（カメラまで揺れると画面酔いするため）
       const y = this.myMesh.position.y;
       this.followCam.position.set(this.baseX, y + 8, this.baseZ + 7);

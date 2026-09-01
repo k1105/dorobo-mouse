@@ -8,6 +8,7 @@ export class Hud {
   private scoreEl: HTMLSpanElement;
   private infoEl: HTMLSpanElement;
   private stealBtn: HTMLButtonElement;
+  private camToggleBtn: HTMLButtonElement;
   private progressWrap: HTMLDivElement;
   private progressBar: HTMLDivElement;
   private bannerWrap: HTMLDivElement;
@@ -25,6 +26,7 @@ export class Hud {
         <span class="hud-info"></span>
       </div>
       <button class="hud-steal-btn hidden">🫳 盗む</button>
+      <button class="hud-cam-toggle hidden"></button>
       <div class="hud-progress hidden"><div class="hud-progress-bar"></div><span class="hud-progress-label">盗み中…</span></div>
       <div class="hud-banners"></div>
       <div class="hud-center"></div>
@@ -35,6 +37,7 @@ export class Hud {
     this.scoreEl = this.root.querySelector('.hud-score')!;
     this.infoEl = this.root.querySelector('.hud-info')!;
     this.stealBtn = this.root.querySelector('.hud-steal-btn')!;
+    this.camToggleBtn = this.root.querySelector('.hud-cam-toggle')!;
     this.progressWrap = this.root.querySelector('.hud-progress')!;
     this.progressBar = this.root.querySelector('.hud-progress-bar')!;
     this.bannerWrap = this.root.querySelector('.hud-banners')!;
@@ -70,6 +73,23 @@ export class Hud {
     };
   }
 
+  /** ネズミ専用: 視点切替ボタン（追従カメラ ⇔ 一人称）を表示する */
+  showCamToggle(onToggle: () => void): void {
+    this.camToggleBtn.classList.remove('hidden');
+    this.setCamMode(false);
+    this.camToggleBtn.onclick = () => {
+      // 盗むボタンと同様、フォーカスを残すとSpace/Enterで再発火するため外す
+      this.camToggleBtn.blur();
+      onToggle();
+    };
+  }
+
+  /** 視点切替ボタンの表示を現在のモードに合わせる */
+  setCamMode(fps: boolean): void {
+    this.camToggleBtn.textContent = fps ? '👁 視点: 一人称' : '🎥 視点: 追従';
+    this.camToggleBtn.classList.toggle('active', fps);
+  }
+
   /** 盗み中はボタンを押せなくする */
   setStealActive(active: boolean): void {
     this.stealBtn.disabled = active;
@@ -100,11 +120,14 @@ export class Hud {
     this.centerEl.classList.toggle('small', small);
   }
 
-  /** ダウト成功時の全画面演出。durationMs後に自動で消える */
-  showDoubtSuccess(durationMs: number): void {
+  /** ダウト成功・万引き成功などの全画面演出。durationMs後に自動で消える */
+  showBigText(text: string, durationMs: number): void {
     const el = document.createElement('div');
     el.className = 'doubt-overlay';
-    el.innerHTML = '<div class="doubt-text">ダウト成功！</div>';
+    const inner = document.createElement('div');
+    inner.className = 'doubt-text';
+    inner.textContent = text;
+    el.appendChild(inner);
     this.root.appendChild(el);
     setTimeout(() => el.remove(), durationMs);
   }

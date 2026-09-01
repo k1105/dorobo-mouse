@@ -31,6 +31,14 @@ export const CONFIG = {
   respawnDelaySec: 3,
   /** ダウト成功演出の表示時間（秒）。この時間が経ってから攻守交代する */
   doubtEffectSec: 2.5,
+  /** 追従カメラの視野角（度） */
+  followFov: 60,
+  /** 一人称（泥棒目線）カメラの視野角（度） */
+  fpsFov: 75,
+  /** 一人称カメラの目の高さ（カプセルの頭頂が1.4） */
+  fpsEyeHeight: 1.2,
+  /** 一人称カメラが進行方向へ向き直る速さ（大きいほど速い） */
+  fpsTurnSpeed: 8,
 } as const;
 
 export const COLORS = {
