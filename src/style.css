@@ -148,6 +148,53 @@ body,
   font-size: 11px;
   color: #ccc;
 }
+/* ---- ステージ選択（ロビー。ホストのみ変更可） ---- */
+.stage-select h3 {
+  font-size: 14px;
+  color: #ddd;
+  margin-bottom: 8px;
+}
+.stage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.stage-card {
+  border: 2px solid transparent;
+  border-radius: 10px;
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #33343d;
+  color: #fff;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.stage-card:disabled {
+  cursor: default;
+  opacity: 0.75;
+}
+.stage-card.selected {
+  border-color: #ffb300;
+  background: #4a3f24;
+  opacity: 1;
+}
+.stage-name {
+  font-weight: bold;
+  font-size: 14px;
+}
+.stage-desc {
+  font-size: 11px;
+  color: #ccc;
+  line-height: 1.4;
+}
+.stage-meta {
+  font-size: 10px;
+  color: #aaa;
+}
+
 .role-owner {
   font-size: 12px;
   color: #ddd;

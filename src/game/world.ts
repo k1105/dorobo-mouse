@@ -1,21 +1,17 @@
 import * as THREE from 'three';
 import { COLORS, ITEMS, priceTierColor, type Item } from '../config';
 import { mulberry32, shuffled } from './rng';
-import { NavGrid } from './nav';
+import { NavGrid, type NavLayer, type NavLink } from './nav';
+import type { RampDef, Rect, Side, StageDef } from './stages';
 
-/** XZ平面上の矩形（衝突判定用） */
-export interface Rect {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-}
+export type { Rect, Side } from './stages';
 
 /** 盗みスポット（棚の一区画）。itemの値段が持ち出し時のスコアになる */
 export interface Spot {
   idx: number;
   x: number;
   z: number;
+  floor: number;
   item: Item;
 }
 
@@ -24,6 +20,7 @@ export interface CamInfo {
   id: number;
   x: number;
   z: number;
+  floor: number;
   /** XZ平面での向き（atan2(dz, dx)） */
   angle: number;
   /** 水平画角（度） */
@@ -40,18 +37,49 @@ export interface ShelfDraw {
   label: string;
 }
 
-export interface MapData {
-  halfX: number;
-  halfZ: number;
-  exitHalfW: number;
+/** カメラマップ描画用のスロープ情報 */
+export interface RampDraw {
+  rect: Rect;
+  up: Side;
+  from: number;
+  to: number;
+}
+
+/** 1フロア分のマップ描画データ */
+export interface FloorMapData {
+  name: string;
+  rect: Rect;
+  exit?: { x: number; halfW: number };
   shelves: ShelfDraw[];
   /** カメラの視線を遮る矩形（壁 + 背の高い棚。平台は遮らない） */
   occluders: Rect[];
   cams: CamInfo[];
 }
 
-export interface World {
+export interface MapData {
+  floors: FloorMapData[];
+  ramps: RampDraw[];
+}
+
+/** 店内を移動するもの（プレイヤー）の位置。floor はスロープ上では直前にいたフロア */
+export interface MoverPos {
+  x: number;
+  z: number;
+  floor: number;
+}
+
+/** ワールド構築後の1フロア分の情報 */
+export interface FloorInfo {
+  y: number;
+  /** プレイヤーの移動範囲 */
+  bounds: Rect;
+  /** プレイヤーの衝突判定用 */
   obstacles: Rect[];
+}
+
+export interface World {
+  stage: StageDef;
+  floors: FloorInfo[];
   spots: Spot[];
   cctvCams: THREE.PerspectiveCamera[];
   camPositions: THREE.Vector3[];
@@ -60,104 +88,34 @@ export interface World {
   /** カメラ視野の床ハイライト。オンライン時に表示する */
   camFovMeshes: THREE.Mesh[];
   /** 全カメラの死角になっているリスポーン地点（万引き後に戻る場所） */
-  blindSpawn: { x: number; z: number };
-  bounds: Rect;
+  blindSpawn: MoverPos;
   nav: NavGrid;
   mapData: MapData;
-  isInExitZone: (x: number, z: number) => boolean;
+  /** (x,z) の床面の高さ。スロープ上では両端のフロアの高さを補間する */
+  heightAt: (x: number, z: number, floor: number) => number;
+  /** プレイヤーの移動（棚・壁との衝突、スロープでのフロア移動を処理して p を更新する） */
+  move: (p: MoverPos, dx: number, dz: number) => void;
+  isInExitZone: (x: number, z: number, floor: number) => boolean;
 }
 
-// 店のレイアウト定数
-export const FLOOR_HALF_X = 21;
-export const FLOOR_HALF_Z = 14;
-const EXIT_HALF_W = 1.5; // 出口（z=-14側の壁の隙間）の半幅
+/**
+ * 2F以上の静的メッシュ（床板・棚・手すり・カメラ）が属するレイヤ。
+ * 1Fにいるネズミの追従カメラでは上階の床板が視界を塞ぐため、このレイヤを外して描画する。
+ * CCTVカメラ・一人称カメラは全レイヤを描画する
+ */
+export const UPPER_LAYER = 1;
+/** 動くもの（NPC・他プレイヤー）をどの高さから UPPER_LAYER に入れるか */
+export const UPPER_LAYER_MIN_Y = 2.0;
+/** ネズミのカプセルの足元から中心までの高さ（makeCapsule の position.y） */
+export const CAPSULE_Y = 0.7;
 
-// 売り場の色分け（参考: 実際のスーパーの平面図の配色）
-const SEC = {
-  meat: 0xf06292, // 精肉
-  fish: 0x4dd0e1, // 鮮魚
-  deli: 0xffa726, // 惣菜
-  bakery: 0xd7a86e, // ベーカリー
-  dairy: 0xffe082, // 日配
-  frozen: 0x9575cd, // 冷凍食品
-  drink: 0x64b5f6, // 飲料
-  liquor: 0x7986cb, // 酒
-  produce: 0x81c784, // 青果
-  snack: 0xe57373, // 菓子
-  grocery: 0xa1887f, // 加工食品
-  dried: 0x26a69a, // 塩干
-} as const;
-
-/** 盗みスポット・商品飾りを置く面。n=z負側(奥/出口側), s=z正側(手前), e=x正側, w=x負側 */
-type Side = 'n' | 's' | 'e' | 'w';
-
-interface ShelfDef {
-  minX: number;
-  maxX: number;
-  minZ: number;
-  maxZ: number;
-  h: number;
-  /** 売り場の色（現在は未使用。棚の実際の色は商品の料金帯で決まる） */
-  color: number;
-  label: string;
-  sides: Side[];
-}
-
-const CASE_H = 2.0; // 壁面ケース
-const GONDOLA_H = 2.2; // 中央ゴンドラ
-const ISLAND_H = 1.0; // 平台（低いのでカメラの視線は通る）
-
-// 店内レイアウト。通路幅はプレイヤー・NPCが通れるよう最低2.4を確保する
-const SHELVES: ShelfDef[] = [
-  // ---- 壁面ケース ----
-  { minX: -20.7, maxX: -19.5, minZ: -11, maxZ: 5, h: CASE_H, color: SEC.fish, label: '鮮魚', sides: ['e'] },
-  { minX: -20.7, maxX: -19.5, minZ: 7, maxZ: 12, h: CASE_H, color: SEC.dried, label: '塩干', sides: ['e'] },
-  { minX: -19.5, maxX: -3.5, minZ: -13.7, maxZ: -12.5, h: CASE_H, color: SEC.meat, label: '精肉', sides: ['s'] },
-  { minX: 3.5, maxX: 13, minZ: -13.7, maxZ: -12.5, h: CASE_H, color: SEC.deli, label: '惣菜', sides: ['s'] },
-  { minX: 13, maxX: 19.5, minZ: -13.7, maxZ: -12.5, h: CASE_H, color: SEC.bakery, label: 'ベーカリー', sides: ['s'] },
-  { minX: 19.5, maxX: 20.7, minZ: -11, maxZ: -1, h: CASE_H, color: SEC.liquor, label: '酒', sides: ['w'] },
-  { minX: 19.5, maxX: 20.7, minZ: 1, maxZ: 11, h: CASE_H, color: SEC.drink, label: '飲料', sides: ['w'] },
-  { minX: -19.5, maxX: -6, minZ: 12.5, maxZ: 13.7, h: CASE_H, color: SEC.dairy, label: '日配', sides: ['n'] },
-  { minX: -2, maxX: 10, minZ: 12.5, maxZ: 13.7, h: CASE_H, color: SEC.frozen, label: '冷凍食品', sides: ['n'] },
-  { minX: 12, maxX: 19.5, minZ: 12.5, maxZ: 13.7, h: CASE_H, color: SEC.produce, label: '青果', sides: ['n'] },
-  // ---- 左ゾーン（縦ゴンドラ、中央に横断通路） ----
-  { minX: -16.8, maxX: -15.2, minZ: -9, maxZ: -3, h: GONDOLA_H, color: SEC.meat, label: '精肉', sides: ['e', 'w'] },
-  { minX: -16.8, maxX: -15.2, minZ: 1, maxZ: 9, h: GONDOLA_H, color: SEC.fish, label: '鮮魚', sides: ['e', 'w'] },
-  { minX: -10.8, maxX: -9.2, minZ: -9, maxZ: -3, h: GONDOLA_H, color: SEC.dairy, label: '日配', sides: ['e', 'w'] },
-  { minX: -10.8, maxX: -9.2, minZ: 1, maxZ: 9, h: GONDOLA_H, color: SEC.frozen, label: '冷凍', sides: ['e', 'w'] },
-  // ---- 中央ゾーン（横ゴンドラ4列 × 2区間。x=3〜5が縦の横断通路） ----
-  { minX: -6, maxX: 3, minZ: -8.8, maxZ: -7.2, h: GONDOLA_H, color: SEC.snack, label: '菓子', sides: ['n', 's'] },
-  { minX: 5, maxX: 15, minZ: -8.8, maxZ: -7.2, h: GONDOLA_H, color: SEC.grocery, label: '加工食品', sides: ['n', 's'] },
-  { minX: -6, maxX: 3, minZ: -4.8, maxZ: -3.2, h: GONDOLA_H, color: SEC.grocery, label: '加工食品', sides: ['n', 's'] },
-  { minX: 5, maxX: 15, minZ: -4.8, maxZ: -3.2, h: GONDOLA_H, color: SEC.snack, label: '菓子', sides: ['n', 's'] },
-  { minX: -6, maxX: 3, minZ: -0.8, maxZ: 0.8, h: GONDOLA_H, color: SEC.drink, label: '飲料', sides: ['n', 's'] },
-  { minX: 5, maxX: 15, minZ: -0.8, maxZ: 0.8, h: GONDOLA_H, color: SEC.grocery, label: '加工食品', sides: ['n', 's'] },
-  { minX: -6, maxX: 3, minZ: 3.2, maxZ: 4.8, h: GONDOLA_H, color: SEC.snack, label: '菓子', sides: ['n', 's'] },
-  { minX: 5, maxX: 15, minZ: 3.2, maxZ: 4.8, h: GONDOLA_H, color: SEC.dairy, label: '日配', sides: ['n', 's'] },
-  // ---- 平台の島（低い。カメラは上越しに見えるが、通行は塞ぐ） ----
-  { minX: -1.2, maxX: 1.2, minZ: -12.3, maxZ: -10.3, h: ISLAND_H, color: SEC.deli, label: '惣菜平台', sides: ['e', 'w', 's'] },
-  { minX: -3.1, maxX: -0.9, minZ: 6.9, maxZ: 9.1, h: ISLAND_H, color: SEC.snack, label: '特売', sides: ['n', 's', 'e', 'w'] },
-  { minX: 10.7, maxX: 13.3, minZ: 7.2, maxZ: 9.8, h: ISLAND_H, color: SEC.produce, label: '青果平台', sides: ['n', 's', 'e', 'w'] },
-  { minX: 15.7, maxX: 18.3, minZ: 7.2, maxZ: 9.8, h: ISLAND_H, color: SEC.produce, label: '青果平台', sides: ['n', 's', 'w'] },
-];
-
-// 防犯カメラ12台。位置と注視点（死角設計はここを調整する）
-const CAM_Y = 3.6;
+const CAM_Y = 3.6; // 床面からのカメラの高さ
 const CAM_RANGE = 15;
-const CAM_DEFS: { x: number; z: number; aimX: number; aimZ: number; range?: number }[] = [
-  { x: -19.5, z: -11.5, aimX: -10, aimZ: -4 }, // 1: 左上コーナー
-  { x: 0, z: -13.2, aimX: 0, aimZ: -4 }, // 2: 出口上から店内向き
-  { x: 19.5, z: -11.5, aimX: 10, aimZ: -4 }, // 3: 右上コーナー
-  { x: -19.5, z: -1, aimX: -8, aimZ: -1 }, // 4: 左壁中央（左ゾーン横断通路）
-  { x: 19.5, z: 0, aimX: 10, aimZ: 0 }, // 5: 右壁中央（中央列の東端）
-  { x: -19.5, z: 11.5, aimX: -10, aimZ: 6 }, // 6: 左下コーナー
-  { x: -4, z: 13.2, aimX: -2, aimZ: 4 }, // 7: 下壁のケースの隙間（スポーン前通路）
-  { x: 19.5, z: 11.5, aimX: 12, aimZ: 7 }, // 8: 右下コーナー（青果）
-  { x: 4, z: -10.5, aimX: 4, aimZ: 4 }, // 9: 中央の縦横断通路を南向き
-  { x: -8, z: -1, aimX: -16, aimZ: -1 }, // 10: 左ゾーン横断通路を西向き
-  { x: -13, z: 10.5, aimX: -13, aimZ: 0 }, // 11: 左ゾーン縦通路を北向き
-  { x: 17, z: 2, aimX: 5, aimZ: 2 }, // 12: C-D列間の通路を西向き
-];
+const WALL_H = 1.4; // 1Fの外周の壁
+const WALL_T = 0.6;
+const RAIL_H = 1.0; // 上階の外周・吹き抜けの手すり
+const RAIL_T = 0.3;
+const PLATE_T = 0.3; // 上階の床板の厚み
 
 /** 16:9表示時の水平画角（three.jsのfovは垂直画角なので換算する） */
 function horizontalFovDeg(vfovDeg: number, aspect: number): number {
@@ -166,9 +124,101 @@ function horizontalFovDeg(vfovDeg: number, aspect: number): number {
   );
 }
 
-export function buildWorld(scene: THREE.Scene, seed: number): World {
-  const obstacles: Rect[] = [];
-  const occluders: Rect[] = [];
+/** スロープの下端から上端へ向かう割合（0=下端, 1=上端）。矩形の外でも延長線上で計算する */
+function rampAlong(r: RampDef, x: number, z: number): number {
+  const { rect, up } = r;
+  let k: number;
+  if (up === 'n') k = (rect.maxZ - z) / (rect.maxZ - rect.minZ);
+  else if (up === 's') k = (z - rect.minZ) / (rect.maxZ - rect.minZ);
+  else if (up === 'e') k = (x - rect.minX) / (rect.maxX - rect.minX);
+  else k = (rect.maxX - x) / (rect.maxX - rect.minX);
+  return Math.min(1, Math.max(0, k));
+}
+
+function inRect(r: Rect, x: number, z: number): boolean {
+  return x >= r.minX && x <= r.maxX && z >= r.minZ && z <= r.maxZ;
+}
+
+function intersectRect(a: Rect, b: Rect): Rect | null {
+  const r = {
+    minX: Math.max(a.minX, b.minX),
+    maxX: Math.min(a.maxX, b.maxX),
+    minZ: Math.max(a.minZ, b.minZ),
+    maxZ: Math.min(a.maxZ, b.maxZ),
+  };
+  return r.minX < r.maxX && r.minZ < r.maxZ ? r : null;
+}
+
+/** 矩形 a から穴 holes を除いた矩形群（床板を穴あきで描くため） */
+function subtractRects(a: Rect, holes: Rect[]): Rect[] {
+  let parts = [a];
+  for (const h of holes) {
+    const next: Rect[] = [];
+    for (const p of parts) {
+      const c = intersectRect(p, h);
+      if (!c) {
+        next.push(p);
+        continue;
+      }
+      if (c.minZ > p.minZ) next.push({ ...p, maxZ: c.minZ });
+      if (c.maxZ < p.maxZ) next.push({ ...p, minZ: c.maxZ });
+      if (c.minX > p.minX) next.push({ minX: p.minX, maxX: c.minX, minZ: c.minZ, maxZ: c.maxZ });
+      if (c.maxX < p.maxX) next.push({ minX: c.maxX, maxX: p.maxX, minZ: c.minZ, maxZ: c.maxZ });
+    }
+    parts = next;
+  }
+  return parts;
+}
+
+/** スロープの両側の手すりの矩形（坂の内側に沿った細い帯。横からの出入りを防ぐ） */
+function rampRails(r: RampDef): Rect[] {
+  const { rect, up } = r;
+  if (up === 'n' || up === 's') {
+    return [
+      { ...rect, maxX: rect.minX + RAIL_T },
+      { ...rect, minX: rect.maxX - RAIL_T },
+    ];
+  }
+  return [
+    { ...rect, maxZ: rect.minZ + RAIL_T },
+    { ...rect, minZ: rect.maxZ - RAIL_T },
+  ];
+}
+
+/** スロープの上端の内側にある細い帯（下のフロアの歩行グリッドで、坂の先へ抜けないようにする） */
+function rampTopBlocker(r: RampDef): Rect {
+  const { rect, up } = r;
+  const t = 0.2;
+  if (up === 'n') return { ...rect, maxZ: rect.minZ + t };
+  if (up === 's') return { ...rect, minZ: rect.maxZ - t };
+  if (up === 'e') return { ...rect, minX: rect.maxX - t };
+  return { ...rect, maxX: rect.minX + t };
+}
+
+/** スロープの中心線上で、上端から dist だけ（正=坂の内側、負=坂の先の上階側）離れた点 */
+function rampTopPoint(r: RampDef, dist: number): { x: number; z: number } {
+  const { rect, up } = r;
+  const cx = (rect.minX + rect.maxX) / 2;
+  const cz = (rect.minZ + rect.maxZ) / 2;
+  if (up === 'n') return { x: cx, z: rect.minZ + dist };
+  if (up === 's') return { x: cx, z: rect.maxZ - dist };
+  if (up === 'e') return { x: rect.maxX - dist, z: cz };
+  return { x: rect.minX + dist, z: cz };
+}
+
+export function buildWorld(scene: THREE.Scene, seed: number, stage: StageDef): World {
+  const floors: FloorInfo[] = [];
+  const floorOccluders: Rect[][] = [];
+  const floorShelfDraws: ShelfDraw[][] = [];
+  const floorCamInfos: CamInfo[][] = [];
+  const navLayers: NavLayer[] = [];
+  const navLinks: NavLink[] = [];
+
+  // 上階のメッシュは UPPER_LAYER に入れる（1Fの追従カメラで非表示にできるように）
+  const addMesh = (mesh: THREE.Object3D, floorIdx: number) => {
+    if (floorIdx > 0) mesh.traverse((o) => o.layers.set(UPPER_LAYER));
+    scene.add(mesh);
+  };
 
   // ライト
   scene.background = new THREE.Color(0xd7d3cc);
@@ -177,237 +227,409 @@ export function buildWorld(scene: THREE.Scene, seed: number): World {
   dir.position.set(8, 20, 10);
   scene.add(dir);
 
-  // 床
-  const floor = new THREE.Mesh(
-    new THREE.PlaneGeometry(FLOOR_HALF_X * 2 + 2, FLOOR_HALF_Z * 2 + 2),
-    new THREE.MeshStandardMaterial({ color: COLORS.floor }),
-  );
-  floor.rotation.x = -Math.PI / 2;
-  scene.add(floor);
-
   // 棚ごとに商品を1つ割り当てる（同じ棚のスポットはすべて同じ商品）。棚の色は商品の料金帯で決まる
   const itemRng = mulberry32(seed ^ 0x5e7a11);
   const itemPool = shuffled(ITEMS, itemRng);
-  const shelfItems: Item[] = SHELVES.map((_, i) => itemPool[i % itemPool.length]);
-  const shelfColors: number[] = shelfItems.map((item) => priceTierColor(item.price));
-
-  // 棚・ケース・平台（料金帯ごとに色分け）
+  let shelfCounter = 0;
   const decoRng = mulberry32(12345); // 飾りは全クライアント共通の固定seed
   const decoGeo = new THREE.BoxGeometry(0.5, 0.4, 0.4);
-  SHELVES.forEach((s, shelfIdx) => {
-    const w = s.maxX - s.minX;
-    const d = s.maxZ - s.minZ;
-    const cx = (s.minX + s.maxX) / 2;
-    const cz = (s.minZ + s.maxZ) / 2;
-    const mesh = new THREE.Mesh(
-      new THREE.BoxGeometry(w, s.h, d),
-      new THREE.MeshStandardMaterial({ color: shelfColors[shelfIdx] }),
-    );
-    mesh.position.set(cx, s.h / 2, cz);
-    scene.add(mesh);
-    const rect: Rect = { minX: s.minX, maxX: s.maxX, minZ: s.minZ, maxZ: s.maxZ };
-    obstacles.push(rect);
-    if (s.h >= 1.8) occluders.push(rect); // 平台は低いのでカメラの視線を遮らない
 
-    // 商品の飾り（面に沿って小箱を並べる）
-    for (const side of s.sides) {
-      const horizontal = side === 'n' || side === 's';
-      const from = (horizontal ? s.minX : s.minZ) + 0.6;
-      const to = (horizontal ? s.maxX : s.maxZ) - 0.6;
-      for (let p = from; p <= to; p += 1.2) {
-        const deco = new THREE.Mesh(
-          decoGeo,
-          new THREE.MeshStandardMaterial({
-            color: new THREE.Color().setHSL(decoRng(), 0.6, 0.55),
-          }),
-        );
-        const off = 0.18;
-        if (side === 'n') deco.position.set(p, s.h - 0.4, s.minZ - off);
-        else if (side === 's') deco.position.set(p, s.h - 0.4, s.maxZ + off);
-        else if (side === 'w') deco.position.set(s.minX - off, s.h - 0.4, p);
-        else deco.position.set(s.maxX + off, s.h - 0.4, p);
-        scene.add(deco);
-      }
-    }
-  });
-
-  // 壁（出口の隙間だけ空ける）
-  const wallMat = new THREE.MeshStandardMaterial({ color: COLORS.wall });
-  const wallH = 1.4;
-  const wallT = 0.6;
-  const wx = FLOOR_HALF_X;
-  const wz = FLOOR_HALF_Z;
-  const addWall = (cx: number, cz: number, w: number, d: number) => {
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, d), wallMat);
-    wall.position.set(cx, wallH / 2, cz);
-    scene.add(wall);
-    const rect: Rect = {
-      minX: cx - w / 2,
-      maxX: cx + w / 2,
-      minZ: cz - d / 2,
-      maxZ: cz + d / 2,
-    };
-    obstacles.push(rect);
-    occluders.push(rect);
-  };
-  // 上の壁（z=-14）: 出口の隙間を挟んで2枚
-  const topSegW = wx - EXIT_HALF_W;
-  addWall(-(EXIT_HALF_W + topSegW / 2), -wz, topSegW, wallT);
-  addWall(EXIT_HALF_W + topSegW / 2, -wz, topSegW, wallT);
-  addWall(0, wz, wx * 2 + wallT, wallT); // 下
-  addWall(-wx, 0, wallT, wz * 2 + wallT); // 左
-  addWall(wx, 0, wallT, wz * 2 + wallT); // 右
-
-  // 出口の目印（緑のゲート）
-  const gateMat = new THREE.MeshStandardMaterial({
-    color: COLORS.exit,
-    transparent: true,
-    opacity: 0.45,
-  });
-  const gate = new THREE.Mesh(new THREE.BoxGeometry(EXIT_HALF_W * 2, 2.4, 0.2), gateMat);
-  gate.position.set(0, 1.2, -wz);
-  scene.add(gate);
-  const gatePostGeo = new THREE.BoxGeometry(0.25, 2.6, 0.25);
-  const gatePostMat = new THREE.MeshStandardMaterial({ color: COLORS.exit });
-  for (const side of [-1, 1]) {
-    const post = new THREE.Mesh(gatePostGeo, gatePostMat);
-    post.position.set(side * EXIT_HALF_W, 1.3, -wz);
-    scene.add(post);
-  }
-
-  // 盗みスポット（棚の各面に沿って約2.8間隔）。商品はその棚に割り当てたもの
   const spots: Spot[] = [];
-  let idx = 0;
-  const SPOT_OFF = 0.7;
-  SHELVES.forEach((s, shelfIdx) => {
-    const item = shelfItems[shelfIdx];
-    const addSpot = (x: number, z: number) => {
-      spots.push({ idx, x, z, item });
-      idx++;
-    };
-    for (const side of s.sides) {
-      const horizontal = side === 'n' || side === 's';
-      const from = (horizontal ? s.minX : s.minZ) + 1.2;
-      const to = (horizontal ? s.maxX : s.maxZ) - 1.2;
-      for (let p = from; p <= to + 0.01; p += 2.8) {
-        if (side === 'n') addSpot(p, s.minZ - SPOT_OFF);
-        else if (side === 's') addSpot(p, s.maxZ + SPOT_OFF);
-        else if (side === 'w') addSpot(s.minX - SPOT_OFF, p);
-        else addSpot(s.maxX + SPOT_OFF, p);
-      }
-    }
-  });
-  // 防犯カメラ12台。赤い球で見える化（球はオンライン時に発光させるため個別マテリアル）
   const cctvCams: THREE.PerspectiveCamera[] = [];
   const camPositions: THREE.Vector3[] = [];
-  const camInfos: CamInfo[] = [];
   const camBalls: THREE.Mesh[] = [];
+  const camFovMeshes: THREE.Mesh[] = [];
   const camBallGeo = new THREE.SphereGeometry(0.35, 16, 12);
   const poleMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
-  CAM_DEFS.forEach((def, i) => {
-    const pos = new THREE.Vector3(def.x, CAM_Y, def.z);
-    camPositions.push(pos);
-    const cam = new THREE.PerspectiveCamera(72, 16 / 9, 0.1, 80);
-    cam.position.copy(pos);
-    cam.lookAt(def.aimX, 0.4, def.aimZ);
-    cctvCams.push(cam);
-    camInfos.push({
-      id: i,
-      x: def.x,
-      z: def.z,
-      angle: Math.atan2(def.aimZ - def.z, def.aimX - def.x),
-      hfovDeg: horizontalFovDeg(72, 16 / 9),
-      range: def.range ?? CAM_RANGE,
-    });
-    const ball = new THREE.Mesh(
-      camBallGeo,
-      new THREE.MeshStandardMaterial({ color: COLORS.camera }),
-    );
-    ball.position.copy(pos);
-    scene.add(ball);
-    camBalls.push(ball);
-    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, CAM_Y, 8), poleMat);
-    pole.position.set(def.x, CAM_Y / 2, def.z);
-    scene.add(pole);
-  });
+  const wallMat = new THREE.MeshStandardMaterial({ color: COLORS.wall });
+  const floorMat = new THREE.MeshStandardMaterial({ color: COLORS.floor });
 
-  // オンラインのカメラが「見ている」床の範囲を明るくするハイライト（遮蔽考慮の扇形）
-  const camFovMeshes: THREE.Mesh[] = [];
-  const FOV_RAYS = 72;
-  camInfos.forEach((cam, i) => {
-    const half = ((cam.hfovDeg / 2) * Math.PI) / 180;
-    const shape = new THREE.Shape();
-    shape.moveTo(cam.x, -cam.z); // 床(rotation.x=-π/2)ではローカルy→ワールド-z
-    for (let r = 0; r <= FOV_RAYS; r++) {
-      const a = cam.angle - half + (2 * half * r) / FOV_RAYS;
-      const d = castRay(cam.x, cam.z, Math.cos(a), Math.sin(a), cam.range, occluders);
-      shape.lineTo(cam.x + Math.cos(a) * d, -(cam.z + Math.sin(a) * d));
+  // スロープの手すりはどのフロアでも障害物（横から坂に入れない・坂の脇に立ち入れない）
+  const railRects = stage.ramps.flatMap(rampRails);
+
+  stage.floors.forEach((f, fi) => {
+    const obstacles: Rect[] = [...railRects];
+    const occluders: Rect[] = [];
+    const fw = f.rect.maxX - f.rect.minX;
+    const fd = f.rect.maxZ - f.rect.minZ;
+    const cx = (f.rect.minX + f.rect.maxX) / 2;
+    const cz = (f.rect.minZ + f.rect.maxZ) / 2;
+
+    // 床。1Fは一枚板、上階はスロープの吹き抜けを避けた板
+    if (fi === 0) {
+      const floor = new THREE.Mesh(new THREE.PlaneGeometry(fw + 2, fd + 2), floorMat);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.set(cx, f.y, cz);
+      addMesh(floor, fi);
+    } else {
+      const holes = stage.ramps.filter((r) => r.to === fi).map((r) => r.rect);
+      for (const p of subtractRects(f.rect, holes)) {
+        const plate = new THREE.Mesh(
+          new THREE.BoxGeometry(p.maxX - p.minX, PLATE_T, p.maxZ - p.minZ),
+          floorMat,
+        );
+        plate.position.set((p.minX + p.maxX) / 2, f.y - PLATE_T / 2, (p.minZ + p.maxZ) / 2);
+        addMesh(plate, fi);
+      }
     }
-    const mesh = new THREE.Mesh(
-      new THREE.ShapeGeometry(shape),
-      new THREE.MeshBasicMaterial({
-        color: 0xfff2b0,
+
+    // 棚・ケース・平台（料金帯ごとに色分け）
+    const shelfDraws: ShelfDraw[] = [];
+    for (const s of f.shelves) {
+      const item = itemPool[shelfCounter % itemPool.length];
+      shelfCounter++;
+      const color = priceTierColor(item.price);
+      const w = s.maxX - s.minX;
+      const d = s.maxZ - s.minZ;
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(w, s.h, d),
+        new THREE.MeshStandardMaterial({ color }),
+      );
+      mesh.position.set((s.minX + s.maxX) / 2, f.y + s.h / 2, (s.minZ + s.maxZ) / 2);
+      addMesh(mesh, fi);
+      const rect: Rect = { minX: s.minX, maxX: s.maxX, minZ: s.minZ, maxZ: s.maxZ };
+      obstacles.push(rect);
+      if (s.h >= 1.8) occluders.push(rect); // 平台は低いのでカメラの視線を遮らない
+      shelfDraws.push({ rect, color, label: s.label });
+
+      // 商品の飾り（面に沿って小箱を並べる）と盗みスポット（約2.8間隔）
+      const SPOT_OFF = 0.7;
+      for (const side of s.sides) {
+        const horizontal = side === 'n' || side === 's';
+        const from = horizontal ? s.minX : s.minZ;
+        const to = horizontal ? s.maxX : s.maxZ;
+        for (let p = from + 0.6; p <= to - 0.6; p += 1.2) {
+          const deco = new THREE.Mesh(
+            decoGeo,
+            new THREE.MeshStandardMaterial({
+              color: new THREE.Color().setHSL(decoRng(), 0.6, 0.55),
+            }),
+          );
+          const off = 0.18;
+          const y = f.y + s.h - 0.4;
+          if (side === 'n') deco.position.set(p, y, s.minZ - off);
+          else if (side === 's') deco.position.set(p, y, s.maxZ + off);
+          else if (side === 'w') deco.position.set(s.minX - off, y, p);
+          else deco.position.set(s.maxX + off, y, p);
+          addMesh(deco, fi);
+        }
+        for (let p = from + 1.2; p <= to - 1.2 + 0.01; p += 2.8) {
+          const idx = spots.length;
+          if (side === 'n') spots.push({ idx, x: p, z: s.minZ - SPOT_OFF, floor: fi, item });
+          else if (side === 's') spots.push({ idx, x: p, z: s.maxZ + SPOT_OFF, floor: fi, item });
+          else if (side === 'w') spots.push({ idx, x: s.minX - SPOT_OFF, z: p, floor: fi, item });
+          else spots.push({ idx, x: s.maxX + SPOT_OFF, z: p, floor: fi, item });
+        }
+      }
+    }
+
+    // 外周の壁（1F。出口の隙間だけ空ける）／手すり（上階）
+    const wallH = fi === 0 ? WALL_H : RAIL_H;
+    const wallT = fi === 0 ? WALL_T : RAIL_T;
+    const addWall = (wcx: number, wcz: number, w: number, d: number) => {
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, d), wallMat);
+      wall.position.set(wcx, f.y + wallH / 2, wcz);
+      addMesh(wall, fi);
+      const rect: Rect = {
+        minX: wcx - w / 2,
+        maxX: wcx + w / 2,
+        minZ: wcz - d / 2,
+        maxZ: wcz + d / 2,
+      };
+      obstacles.push(rect);
+      // 上階の手すりは低いが、マップ・床ハイライトの2D視野はフロアの範囲で打ち切る（吹き抜け越しの見下ろしは扱わない）
+      occluders.push(rect);
+    };
+    if (f.exit) {
+      // 奥の壁（minZ）: 出口の隙間を挟んで2枚
+      const leftW = f.exit.x - f.exit.halfW - f.rect.minX;
+      const rightW = f.rect.maxX - (f.exit.x + f.exit.halfW);
+      addWall(f.rect.minX + leftW / 2, f.rect.minZ, leftW, wallT);
+      addWall(f.rect.maxX - rightW / 2, f.rect.minZ, rightW, wallT);
+    } else {
+      addWall(cx, f.rect.minZ, fw + wallT, wallT);
+    }
+    addWall(cx, f.rect.maxZ, fw + wallT, wallT); // 手前
+    addWall(f.rect.minX, cz, wallT, fd + wallT); // 左
+    addWall(f.rect.maxX, cz, wallT, fd + wallT); // 右
+
+    // 出口の目印（緑のゲート）
+    if (f.exit) {
+      const gateMat = new THREE.MeshStandardMaterial({
+        color: COLORS.exit,
         transparent: true,
-        opacity: 0.13,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      }),
-    );
-    mesh.rotation.x = -Math.PI / 2;
-    mesh.position.y = 0.02 + i * 0.002; // 重なりのz-fighting回避
-    mesh.visible = false;
-    scene.add(mesh);
-    camFovMeshes.push(mesh);
+        opacity: 0.45,
+      });
+      const gate = new THREE.Mesh(new THREE.BoxGeometry(f.exit.halfW * 2, 2.4, 0.2), gateMat);
+      gate.position.set(f.exit.x, f.y + 1.2, f.rect.minZ);
+      addMesh(gate, fi);
+      const gatePostGeo = new THREE.BoxGeometry(0.25, 2.6, 0.25);
+      const gatePostMat = new THREE.MeshStandardMaterial({ color: COLORS.exit });
+      for (const side of [-1, 1]) {
+        const post = new THREE.Mesh(gatePostGeo, gatePostMat);
+        post.position.set(f.exit.x + side * f.exit.halfW, f.y + 1.3, f.rect.minZ);
+        addMesh(post, fi);
+      }
+    }
+
+    // 防犯カメラ。赤い球で見える化（球はオンライン時に発光させるため個別マテリアル）
+    const camInfos: CamInfo[] = [];
+    for (const def of f.cams) {
+      const id = cctvCams.length;
+      const pos = new THREE.Vector3(def.x, f.y + CAM_Y, def.z);
+      camPositions.push(pos);
+      const cam = new THREE.PerspectiveCamera(72, 16 / 9, 0.1, 80);
+      cam.layers.enableAll();
+      cam.position.copy(pos);
+      cam.lookAt(def.aimX, f.y + 0.4, def.aimZ);
+      cctvCams.push(cam);
+      camInfos.push({
+        id,
+        x: def.x,
+        z: def.z,
+        floor: fi,
+        angle: Math.atan2(def.aimZ - def.z, def.aimX - def.x),
+        hfovDeg: horizontalFovDeg(72, 16 / 9),
+        range: def.range ?? CAM_RANGE,
+      });
+      const ball = new THREE.Mesh(
+        camBallGeo,
+        new THREE.MeshStandardMaterial({ color: COLORS.camera }),
+      );
+      ball.position.copy(pos);
+      addMesh(ball, fi);
+      camBalls.push(ball);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, CAM_Y, 8), poleMat);
+      pole.position.set(def.x, f.y + CAM_Y / 2, def.z);
+      addMesh(pole, fi);
+    }
+
+    // オンラインのカメラが「見ている」床の範囲を明るくするハイライト（遮蔽考慮の扇形）
+    const FOV_RAYS = 72;
+    camInfos.forEach((cam) => {
+      const half = ((cam.hfovDeg / 2) * Math.PI) / 180;
+      const shape = new THREE.Shape();
+      shape.moveTo(cam.x, -cam.z); // 床(rotation.x=-π/2)ではローカルy→ワールド-z
+      for (let r = 0; r <= FOV_RAYS; r++) {
+        const a = cam.angle - half + (2 * half * r) / FOV_RAYS;
+        const d = castRay(cam.x, cam.z, Math.cos(a), Math.sin(a), cam.range, occluders);
+        shape.lineTo(cam.x + Math.cos(a) * d, -(cam.z + Math.sin(a) * d));
+      }
+      const mesh = new THREE.Mesh(
+        new THREE.ShapeGeometry(shape),
+        new THREE.MeshBasicMaterial({
+          color: 0xfff2b0,
+          transparent: true,
+          opacity: 0.13,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+        }),
+      );
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.position.y = f.y + 0.02 + cam.id * 0.002; // 重なりのz-fighting回避
+      mesh.visible = false;
+      addMesh(mesh, fi);
+      camFovMeshes.push(mesh);
+    });
+
+    const bounds: Rect = {
+      minX: f.rect.minX + 0.6,
+      maxX: f.rect.maxX - 0.6,
+      minZ: f.exit ? f.rect.minZ - 1.0 : f.rect.minZ + 0.6, // 出口の分だけ奥に抜けられる
+      maxZ: f.rect.maxZ - 0.6,
+    };
+    floors.push({ y: f.y, bounds, obstacles });
+    floorOccluders.push(occluders);
+    floorShelfDraws.push(shelfDraws);
+    floorCamInfos.push(camInfos);
+
+    // NPC用歩行グリッド。出口前だけ除外してNPCがゲートにたまらないようにする。
+    // スロープは下のフロアでは坂の上端を塞ぎ、上のフロアでは坂全体が吹き抜け（穴）
+    const navObstacles = obstacles.slice();
+    if (f.exit) {
+      navObstacles.push({
+        minX: f.exit.x - 3,
+        maxX: f.exit.x + 3,
+        minZ: f.rect.minZ - 2,
+        maxZ: f.rect.minZ + 1.8,
+      });
+    }
+    for (const r of stage.ramps) {
+      if (r.from === fi) navObstacles.push(rampTopBlocker(r));
+      if (r.to === fi) navObstacles.push(r.rect);
+    }
+    navLayers.push({
+      obstacles: navObstacles,
+      minX: f.rect.minX + 1,
+      maxX: f.rect.maxX - 1,
+      minZ: f.rect.minZ + 1,
+      maxZ: f.rect.maxZ - 1,
+    });
   });
 
-  const bounds: Rect = {
-    minX: -FLOOR_HALF_X + 0.6,
-    maxX: FLOOR_HALF_X - 0.6,
-    minZ: -FLOOR_HALF_Z - 1.0, // 出口の分だけ上に抜けられる
-    maxZ: FLOOR_HALF_Z - 0.6,
-  };
+  // スロープ本体（三角柱）と手すり。上端の内側と上階側を歩行グリッドで接続する
+  for (const r of stage.ramps) {
+    buildRamp(scene, r, stage.floors[r.from].y, stage.floors[r.to].y, wallMat, floorMat);
+    const a = rampTopPoint(r, 1.5);
+    const b = rampTopPoint(r, -1.5);
+    navLinks.push({ a: { ...a, layer: r.from }, b: { ...b, layer: r.to } });
+  }
 
-  // 全カメラの死角になるリスポーン地点を探す（下側=出口の反対側を優先）
-  const blindSpawn = findBlindSpawn(camInfos, occluders, obstacles, bounds);
+  const nav = new NavGrid(navLayers, navLinks);
 
-  // NPC用歩行グリッド。出口前だけ除外してNPCがゲートにたまらないようにする
-  const navObstacles = obstacles.concat([
-    { minX: -3, maxX: 3, minZ: -FLOOR_HALF_Z - 2, maxZ: -12.2 },
-  ]);
-  const nav = new NavGrid(
-    navObstacles,
-    -FLOOR_HALF_X + 1,
-    FLOOR_HALF_X - 1,
-    -FLOOR_HALF_Z + 1,
-    FLOOR_HALF_Z - 1,
+  // 全カメラの死角になるリスポーン地点を1Fで探す（手前=出口の反対側を優先）
+  const blindSpawn = findBlindSpawn(
+    floorCamInfos[0],
+    floorOccluders[0],
+    floors[0].obstacles,
+    floors[0].bounds,
+    stage.floors[0].rect,
+    stage.spawns[0],
   );
 
   const mapData: MapData = {
-    halfX: FLOOR_HALF_X,
-    halfZ: FLOOR_HALF_Z,
-    exitHalfW: EXIT_HALF_W,
-    shelves: SHELVES.map((s, i) => ({
-      rect: { minX: s.minX, maxX: s.maxX, minZ: s.minZ, maxZ: s.maxZ },
-      color: shelfColors[i],
-      label: s.label,
+    floors: stage.floors.map((f, fi) => ({
+      name: f.name,
+      rect: f.rect,
+      exit: f.exit,
+      shelves: floorShelfDraws[fi],
+      occluders: floorOccluders[fi],
+      cams: floorCamInfos[fi],
     })),
-    occluders,
-    cams: camInfos,
+    ramps: stage.ramps.map((r) => ({ rect: r.rect, up: r.up, from: r.from, to: r.to })),
   };
 
+  const rampAt = (x: number, z: number): RampDef | null =>
+    stage.ramps.find((r) => inRect(r.rect, x, z)) ?? null;
+
+  const heightAt = (x: number, z: number, floor: number): number => {
+    const r = rampAt(x, z);
+    if (r) {
+      const y0 = stage.floors[r.from].y;
+      const y1 = stage.floors[r.to].y;
+      return y0 + (y1 - y0) * rampAlong(r, x, z);
+    }
+    return stage.floors[floor]?.y ?? 0;
+  };
+
+  const MOVER_R = 0.4;
+  const hitsAny = (x: number, z: number, rects: Rect[]) =>
+    rects.some(
+      (o) => x + MOVER_R > o.minX && x - MOVER_R < o.maxX && z + MOVER_R > o.minZ && z - MOVER_R < o.maxZ,
+    );
+
+  /**
+   * p にいるものが (nx,nz) へ動けるか。スロープは端からしか出入りできない
+   * （下のフロアからは下端、上のフロアからは上端）。坂の上では手すりだけが障害物
+   */
+  const blocked = (p: MoverPos, nx: number, nz: number): boolean => {
+    const rNow = rampAt(p.x, p.z);
+    const rNext = rampAt(nx, nz);
+    if (rNext) {
+      if (!rNow) {
+        const along = rampAlong(rNext, nx, nz);
+        const okEnd =
+          p.floor === rNext.from ? along < 0.5 : p.floor === rNext.to ? along > 0.5 : false;
+        if (!okEnd) return true;
+      }
+      return hitsAny(nx, nz, railRects);
+    }
+    const floor = rNow ? (rampAlong(rNow, nx, nz) > 0.5 ? rNow.to : rNow.from) : p.floor;
+    return hitsAny(nx, nz, floors[floor].obstacles);
+  };
+
+  const move = (p: MoverPos, dx: number, dz: number): void => {
+    // 軸ごとに判定して壁ずりを可能にする
+    let x = p.x + dx;
+    if (blocked(p, x, p.z)) x = p.x;
+    let z = p.z + dz;
+    if (blocked(p, x, z)) z = p.z;
+    const rNow = rampAt(p.x, p.z);
+    const rNext = rampAt(x, z);
+    if (rNow && !rNext) {
+      // 坂を出た側のフロアに移る
+      p.floor = rampAlong(rNow, x, z) > 0.5 ? rNow.to : rNow.from;
+    }
+    if (rNext) {
+      p.x = x;
+      p.z = z;
+    } else {
+      const b = floors[p.floor].bounds;
+      p.x = Math.min(b.maxX, Math.max(b.minX, x));
+      p.z = Math.min(b.maxZ, Math.max(b.minZ, z));
+    }
+  };
+
+  const exit = stage.floors[0].exit;
+  const exitMinZ = stage.floors[0].rect.minZ;
+
   return {
-    obstacles,
+    stage,
+    floors,
     spots,
     cctvCams,
     camPositions,
     camBalls,
     camFovMeshes,
     blindSpawn,
-    bounds,
     nav,
     mapData,
-    isInExitZone: (x, z) => Math.abs(x) < EXIT_HALF_W - 0.1 && z < -FLOOR_HALF_Z + 0.4,
+    heightAt,
+    move,
+    isInExitZone: (x, z, floor) =>
+      !!exit &&
+      floor === 0 &&
+      Math.abs(x - exit.x) < exit.halfW - 0.1 &&
+      z < exitMinZ + 0.4 &&
+      !rampAt(x, z),
   };
+}
+
+/** スロープ本体（三角柱）と両側の手すりを作る */
+function buildRamp(
+  scene: THREE.Scene,
+  r: RampDef,
+  y0: number,
+  y1: number,
+  railMat: THREE.Material,
+  floorMat: THREE.Material,
+): void {
+  const { rect, up } = r;
+  const alongX = up === 'e' || up === 'w';
+  const len = alongX ? rect.maxX - rect.minX : rect.maxZ - rect.minZ;
+  const width = alongX ? rect.maxZ - rect.minZ : rect.maxX - rect.minX;
+  const h = y1 - y0;
+
+  // ローカル座標: 下端が原点、+x へ進むほど高くなり、幅は z 方向に中心揃え
+  const group = new THREE.Group();
+  const tri = new THREE.Shape();
+  tri.moveTo(0, 0);
+  tri.lineTo(len, 0);
+  tri.lineTo(len, h);
+  tri.closePath();
+  const prismGeo = new THREE.ExtrudeGeometry(tri, { depth: width, bevelEnabled: false });
+  prismGeo.translate(0, 0, -width / 2);
+  group.add(new THREE.Mesh(prismGeo, floorMat));
+
+  const slope = Math.atan2(h, len);
+  const railLen = Math.hypot(len, h);
+  for (const side of [-1, 1]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(railLen, RAIL_H, RAIL_T), railMat);
+    rail.position.set(len / 2, h / 2 + RAIL_H / 2, side * (width / 2 - RAIL_T / 2));
+    rail.rotation.z = slope;
+    group.add(rail);
+  }
+
+  // 向きと位置（ローカル+x → 上る方向）
+  const rotY = up === 'e' ? 0 : up === 'w' ? Math.PI : up === 'n' ? Math.PI / 2 : -Math.PI / 2;
+  group.rotation.y = rotY;
+  const cx = (rect.minX + rect.maxX) / 2;
+  const cz = (rect.minZ + rect.maxZ) / 2;
+  if (up === 'n') group.position.set(cx, y0, rect.maxZ);
+  else if (up === 's') group.position.set(cx, y0, rect.minZ);
+  else if (up === 'e') group.position.set(rect.minX, y0, cz);
+  else group.position.set(rect.maxX, y0, cz);
+  scene.add(group);
 }
 
 /** 点がいずれかのカメラの視野内（画角・距離・遮蔽を考慮）にあるか */
@@ -428,30 +650,33 @@ function isSeenByCams(x: number, z: number, cams: CamInfo[], occluders: Rect[]):
 }
 
 /**
- * 全カメラの死角になる歩行可能な地点を1mグリッドで探す。
- * 出口から遠い下側（z大）→中央寄りの順で優先する。見つからなければ従来のスポーン位置。
+ * 全カメラの死角になる歩行可能な地点を1mグリッドで探す（1F）。
+ * 出口から遠い手前側（z大）→中央寄りの順で優先する。見つからなければ初期スポーン位置。
  */
 function findBlindSpawn(
   cams: CamInfo[],
   occluders: Rect[],
   obstacles: Rect[],
   bounds: Rect,
-): { x: number; z: number } {
+  rect: Rect,
+  fallback: { x: number; z: number },
+): MoverPos {
   const r = 0.5;
   const collides = (x: number, z: number) =>
     obstacles.some((o) => x + r > o.minX && x - r < o.maxX && z + r > o.minZ && z - r < o.maxZ);
   const candidates: { x: number; z: number }[] = [];
-  for (let z = Math.floor(bounds.maxZ); z >= Math.ceil(-FLOOR_HALF_Z + 1); z--) {
+  const cx = (rect.minX + rect.maxX) / 2;
+  for (let z = Math.floor(bounds.maxZ); z >= Math.ceil(rect.minZ + 1); z--) {
     for (let x = Math.ceil(bounds.minX); x <= Math.floor(bounds.maxX); x++) {
       if (collides(x, z)) continue;
       if (isSeenByCams(x, z, cams, occluders)) continue;
       candidates.push({ x, z });
     }
-    if (candidates.length > 0) break; // 一番下側の行から採用
+    if (candidates.length > 0) break; // 一番手前の行から採用
   }
-  if (candidates.length === 0) return { x: 7.5, z: 10.5 };
-  candidates.sort((a, b) => Math.abs(a.x) - Math.abs(b.x));
-  return candidates[0];
+  if (candidates.length === 0) return { ...fallback, floor: 0 };
+  candidates.sort((a, b) => Math.abs(a.x - cx) - Math.abs(b.x - cx));
+  return { ...candidates[0], floor: 0 };
 }
 
 /** 2Dレイと矩形群の最近傍交点までの距離（なければmaxDist） */
@@ -499,6 +724,6 @@ export function makeCapsule(color: number = COLORS.mouse): THREE.Mesh {
     new THREE.CapsuleGeometry(radius, height, 6, 16),
     new THREE.MeshStandardMaterial({ color }),
   );
-  mesh.position.y = radius + height / 2;
+  mesh.position.y = CAPSULE_Y;
   return mesh;
 }

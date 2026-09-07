@@ -7,7 +7,17 @@ import { Controls } from './controls';
 import { CctvView } from './cctv';
 import { CamMapView, MiniMapView } from '../ui/map';
 import { createNpcSims, NpcSim } from './npc';
-import { buildWorld, makeCapsule, type Spot, type World } from './world';
+import {
+  buildWorld,
+  CAPSULE_Y,
+  makeCapsule,
+  UPPER_LAYER,
+  UPPER_LAYER_MIN_Y,
+  type MoverPos,
+  type Spot,
+  type World,
+} from './world';
+import { getStage, type StageDef } from './stages';
 
 /** カメラマップの画面下端からの余白（style.css の .cam-map の bottom と合わせる） */
 const CAM_MAP_BOTTOM_PX = 10;
@@ -19,6 +29,8 @@ interface RemoteAvatar {
   /** 補間済みの実位置（揺れオフセットを含まない）。mesh.positionは表示用でこれに揺れを足す */
   sx: number;
   sz: number;
+  /** 補間済みの高さ（スロープの昇り降りで段差に見えないように） */
+  sy: number;
   /** ダウトされて姿を消す（退場する）までの時刻(performance.now)。この間は再ダウトの対象外 */
   caughtUntil: number;
 }
@@ -39,6 +51,7 @@ export class Game {
   private amCat: boolean;
   private startAt: number;
   private seed: number;
+  private stage: StageDef;
 
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
@@ -54,9 +67,10 @@ export class Game {
 
   private myMesh: THREE.Mesh | null = null;
   private selfRing: THREE.Mesh | null = null;
-  /** 揺れモーション抜きの自分の実位置（移動・判定はこちらを使う） */
-  private baseX = 0;
-  private baseZ = 0;
+  /** 揺れモーション抜きの自分の実位置（移動・判定はこちらを使う）。floor はいるフロア（スロープ上は直前のフロア） */
+  private base: MoverPos = { x: 0, z: 0, floor: 0 };
+  /** 観戦（退場後・役割なし）の俯瞰で上階を表示するか。Fキーで切替 */
+  private spectateUpper = false;
   private remotes = new Map<string, RemoteAvatar>();
   private npcSims: NpcSim[];
   private npcMeshes: THREE.Mesh[] = [];
@@ -117,6 +131,10 @@ export class Game {
     this.amCat = this.myTeam !== null && !this.amMouse;
     this.startAt = phase.startAt ?? Date.now();
     this.seed = phase.seed ?? 1;
+    this.stage = getStage(phase.stage);
+    // ダウトのレイキャストと追従カメラは上階のレイヤも対象にする（追従カメラは状況に応じて外す）
+    this.raycaster.layers.enableAll();
+    this.followCam.layers.enableAll();
 
     // レンダラ
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -127,9 +145,9 @@ export class Game {
     this.onResize();
 
     // ワールドとNPC
-    this.world = buildWorld(this.scene, this.seed);
-    this.npcSims = createNpcSims(this.seed, CONFIG.npcCount, this.world.nav);
-    for (let i = 0; i < CONFIG.npcCount; i++) {
+    this.world = buildWorld(this.scene, this.seed, this.stage);
+    this.npcSims = createNpcSims(this.seed, this.stage.npcCount, this.world.nav);
+    for (let i = 0; i < this.stage.npcCount; i++) {
       const mesh = makeCapsule();
       this.scene.add(mesh);
       this.npcMeshes.push(mesh);
@@ -140,8 +158,7 @@ export class Game {
     if (this.amMouse) {
       this.myMesh = makeCapsule(this.playerColor());
       const spawn = this.spawnPos();
-      this.baseX = spawn.x;
-      this.baseZ = spawn.z;
+      this.base = { x: spawn.x, z: spawn.z, floor: 0 };
       this.myMesh.position.x = spawn.x;
       this.myMesh.position.z = spawn.z;
       // 初期の向きは店内側(-z)。一人称に切り替えた直後に壁ではなく店内が見えるようにする
@@ -167,7 +184,7 @@ export class Game {
       const mesh = makeCapsule(this.playerColor());
       mesh.visible = false; // 最初の位置情報が来るまで隠す
       this.scene.add(mesh);
-      this.remotes.set(pid, { mesh, target: null, sx: 0, sz: 0, caughtUntil: 0 });
+      this.remotes.set(pid, { mesh, target: null, sx: 0, sz: 0, sy: 0, caughtUntil: 0 });
     }
 
     // HUD
@@ -183,6 +200,7 @@ export class Game {
       this.miniMap = new MiniMapView(container, this.world.mapData);
     }
     if (phase.note) this.hud.banner(phase.note, 'info');
+    if (this.round === 1) this.hud.banner(`ステージ: ${this.stage.name}`, 'info');
     if (this.round === 2 && this.myTeam) {
       this.hud.banner(`後半戦: あなたは${this.amMouse ? '🐭 ネズミ' : '🎥 カメラ監視'}です`, 'info');
     }
@@ -254,9 +272,14 @@ export class Game {
   }
 
   private spawnPos(): { x: number; z: number } {
-    // ネズミは下側の通路にばらけてスポーン
-    const i = this.myRole === 'a1' || this.myRole === 'b1' ? -1 : 1;
-    return { x: i * 7.5, z: 10.5 };
+    // ネズミは手前側の通路にばらけてスポーン（ステージ定義の2地点）
+    const i = this.myRole === 'a1' || this.myRole === 'b1' ? 0 : 1;
+    return this.stage.spawns[i];
+  }
+
+  /** 複数フロアのステージか */
+  private multiFloor(): boolean {
+    return this.stage.floors.length > 1;
   }
 
   /** joinedAt最小のプレイヤーがホスト（時間切れのラウンド送りを担当） */
@@ -284,8 +307,8 @@ export class Game {
           // 初回はワープして表示
           r.sx = pos.x;
           r.sz = pos.z;
-          r.mesh.position.x = pos.x;
-          r.mesh.position.z = pos.z;
+          r.sy = this.world.heightAt(pos.x, pos.z, pos.f ?? 0);
+          r.mesh.position.set(pos.x, CAPSULE_Y + r.sy, pos.z);
         }
         // リスポーン待ち中のプレイヤーは非表示（ダウトの対象にもならない）。
         // ダウトで緑色にした後、姿を消したタイミングで元の色に戻す（復帰時は普通のネズミに見える）
@@ -427,8 +450,9 @@ export class Game {
     this.cancelSteal();
     // 最後の位置情報として hidden を送り、他クライアントから姿を消す（以降は送信しない）
     this.net.set(`rooms/${this.room}/pos/${this.net.clientId}`, {
-      x: this.baseX,
-      z: this.baseZ,
+      x: this.base.x,
+      z: this.base.z,
+      f: this.base.floor,
       ry: this.myMesh.rotation.y,
       t: Date.now(),
       hidden: true,
@@ -450,6 +474,12 @@ export class Game {
     this.followCam.updateProjectionMatrix();
     this.hud.hideMouseControls();
     this.hud.setRole(`チーム${this.myTeam}・👻 退場（観戦）`);
+  }
+
+  /** 観戦（退場後・役割なし）の俯瞰で表示するフロアの説明 */
+  private spectateInfo(): string {
+    if (!this.multiFloor()) return '';
+    return ` / 俯瞰: ${this.spectateUpper ? '2F' : '1F'}（Fキーで切替）`;
   }
 
   private publishCams(): void {
@@ -520,6 +550,7 @@ export class Game {
         round: 2,
         startAt: Date.now() + CONFIG.countdownSec * 1000,
         seed: Math.floor(Math.random() * 2 ** 31),
+        stage: this.stage.id,
         note: `${reasonText} — 攻守交代！`,
       } satisfies PhaseState);
     } else {
@@ -547,7 +578,8 @@ export class Game {
     let best: Spot | null = null;
     let bestD: number = CONFIG.stealRadius;
     for (const s of this.world.spots) {
-      const d = Math.hypot(this.baseX - s.x, this.baseZ - s.z);
+      if (s.floor !== this.base.floor) continue; // 別のフロアの棚は盗めない
+      const d = Math.hypot(this.base.x - s.x, this.base.z - s.z);
       if (d <= bestD) {
         bestD = d;
         best = s;
@@ -579,6 +611,11 @@ export class Game {
       this.camMap.toggle();
       // マップの表示/非表示でモニタを置ける帯の高さが変わる
       this.cctv?.relayout();
+      return;
+    }
+    if (code === 'KeyF' && !this.myMesh && !this.amCat && this.multiFloor()) {
+      // 観戦の俯瞰: 1F ⇔ 2F（上階の床板を表示するか）
+      this.spectateUpper = !this.spectateUpper;
       return;
     }
     this.cctv?.handleKey(code);
@@ -662,8 +699,7 @@ export class Game {
     if (this.myMesh && playing && this.respawnAt !== null && t >= this.respawnAt) {
       this.respawnAt = null;
       this.caughtVisibleUntil = null;
-      this.baseX = this.world.blindSpawn.x;
-      this.baseZ = this.world.blindSpawn.z;
+      this.base = { ...this.world.blindSpawn };
       // ダウトで緑色になっていた場合は元の色に戻す
       (this.myMesh.material as THREE.MeshStandardMaterial).color.setHex(this.playerColor());
     }
@@ -715,15 +751,17 @@ export class Game {
         ox = Math.cos(phase) * CONFIG.swayAmp;
         oz = Math.sin(phase) * CONFIG.swayAmp;
       }
-      this.myMesh.position.x = this.baseX + ox;
-      this.myMesh.position.z = this.baseZ + oz;
+      this.myMesh.position.x = this.base.x + ox;
+      this.myMesh.position.z = this.base.z + oz;
+      this.myMesh.position.y = CAPSULE_Y + this.world.heightAt(this.base.x, this.base.z, this.base.floor);
       // 位置送信（スロットリング）。揺れは低頻度送信+補間で潰れるため位置には含めず、
       // swayフラグを送って受信側にローカルで再生させる
       if (playing && now - this.lastPosSend > 1000 / CONFIG.posSendHz) {
         this.lastPosSend = now;
         this.net.set(`rooms/${this.room}/pos/${this.net.clientId}`, {
-          x: this.baseX,
-          z: this.baseZ,
+          x: this.base.x,
+          z: this.base.z,
+          f: this.base.floor,
           ry: this.myMesh.rotation.y,
           t: Date.now(),
           hidden: this.respawnAt !== null && !caughtVisible,
@@ -739,12 +777,14 @@ export class Game {
         this.selfRing.visible = visible;
         this.selfRing.position.x = this.myMesh.position.x;
         this.selfRing.position.z = this.myMesh.position.z;
+        this.selfRing.position.y = this.myMesh.position.y - CAPSULE_Y + 0.05;
       }
       this.miniMap?.update(
-        this.baseX,
-        this.baseZ,
+        this.base.x,
+        this.base.z,
         this.myMesh.rotation.y,
         this.respawnAt !== null && !caughtVisible,
+        this.base.floor,
       );
     }
 
@@ -754,9 +794,10 @@ export class Game {
       for (let i = 0; i < this.npcSims.length; i++) {
         const p = this.npcSims[i].posAt(nt);
         const mesh = this.npcMeshes[i];
-        mesh.position.x = p.x;
-        mesh.position.z = p.z;
+        const y = this.world.heightAt(p.x, p.z, p.layer);
+        mesh.position.set(p.x, CAPSULE_Y + y, p.z);
         mesh.rotation.y = p.ry;
+        this.assignLayer(mesh, y);
         const mat = mesh.material as THREE.MeshStandardMaterial;
         const flashing = now < this.npcFlashUntil[i];
         mat.color.setHex(flashing ? 0xff3333 : COLORS.mouse);
@@ -783,16 +824,18 @@ export class Game {
         rox = Math.cos(phase) * CONFIG.swayAmp;
         roz = Math.sin(phase) * CONFIG.swayAmp;
       }
-      r.mesh.position.x = r.sx + rox;
-      r.mesh.position.z = r.sz + roz;
+      const ty = this.world.heightAt(r.sx, r.sz, r.target.f ?? 0);
+      r.sy = dist > 4 ? ty : r.sy + (ty - r.sy) * Math.min(1, dt * 12);
+      r.mesh.position.set(r.sx + rox, CAPSULE_Y + r.sy, r.sz + roz);
       r.mesh.rotation.y = r.target.ry;
+      this.assignLayer(r.mesh, r.sy);
     }
 
     // ネズミの盗み判定（盗むボタンで開始し、スポットの判定半径内に居続けると成立）
     if (playing && this.amMouse && this.myMesh) {
       if (this.stealSpot && this.stealStart !== null) {
-        const d = Math.hypot(this.baseX - this.stealSpot.x, this.baseZ - this.stealSpot.z);
-        if (d > CONFIG.stealRadius) {
+        const d = Math.hypot(this.base.x - this.stealSpot.x, this.base.z - this.stealSpot.z);
+        if (d > CONFIG.stealRadius || this.stealSpot.floor !== this.base.floor) {
           // 棚から離れたら中断
           this.cancelSteal();
         } else {
@@ -815,7 +858,7 @@ export class Game {
       if (
         this.respawnAt === null &&
         this.myCarrying > 0 &&
-        this.world.isInExitZone(this.baseX, this.baseZ)
+        this.world.isInExitZone(this.base.x, this.base.z, this.base.floor)
       ) {
         const value = this.myCarryingValue;
         this.myCarrying = 0;
@@ -840,11 +883,14 @@ export class Game {
     this.hud.setTimer(remain);
     this.hud.setScore(this.round, this.scoreA, this.scoreB);
     if (this.amMouse && this.eliminated) {
-      this.hud.setInfo(`退場中（観戦） / チームの盗み: ${this.stealCount}`);
+      this.hud.setInfo(`退場中（観戦） / チームの盗み: ${this.stealCount}${this.spectateInfo()}`);
     } else if (this.amMouse) {
-      this.hud.setInfo(`盗み: ${this.stealCount} / 所持: ${this.myCarrying}個 (${this.myCarryingValue}円)`);
+      const floorLabel = this.multiFloor() ? `${this.stage.floors[this.base.floor].name} / ` : '';
+      this.hud.setInfo(`${floorLabel}盗み: ${this.stealCount} / 所持: ${this.myCarrying}個 (${this.myCarryingValue}円)`);
     } else if (this.amCat) {
       this.hud.setInfo(`ダウト残り: ${this.doubtsLeft()}/${CONFIG.doubtsPerRound}`);
+    } else {
+      this.hud.setInfo(`観戦${this.spectateInfo()}`);
     }
 
     // 時間切れ → ラウンド送り（通常はホストが書く。ホスト不在に備えて2秒後は誰でも書く）
@@ -873,19 +919,17 @@ export class Game {
   };
 
   private moveWithCollision(dx: number, dz: number): void {
-    const r = 0.4;
-    const b = this.world.bounds;
-    const collides = (x: number, z: number) =>
-      this.world.obstacles.some(
-        (o) => x + r > o.minX && x - r < o.maxX && z + r > o.minZ && z - r < o.maxZ,
-      );
-    // 軸ごとに判定して壁ずりを可能にする
-    let x = this.baseX + dx;
-    if (collides(x, this.baseZ)) x = this.baseX;
-    let z = this.baseZ + dz;
-    if (collides(x, z)) z = this.baseZ;
-    this.baseX = Math.min(b.maxX, Math.max(b.minX, x));
-    this.baseZ = Math.min(b.maxZ, Math.max(b.minZ, z));
+    // 棚・壁との衝突とスロープでのフロア移動はワールド側で処理する
+    this.world.move(this.base, dx, dz);
+  }
+
+  /**
+   * 動くもの（NPC・他プレイヤー）を高さに応じて上階レイヤに入れる。
+   * 1Fにいるネズミの追従カメラでは上階レイヤを描かないので、2Fの相手は床板ごと隠れる
+   */
+  private assignLayer(mesh: THREE.Mesh, y: number): void {
+    if (!this.multiFloor()) return;
+    mesh.layers.set(y >= UPPER_LAYER_MIN_Y ? UPPER_LAYER : 0);
   }
 
   /** 視点切替ボタン: 追従カメラ ⇔ 一人称（泥棒目線） */
@@ -898,22 +942,35 @@ export class Game {
   }
 
   private updateFollowCam(): void {
+    const { x, z, floor } = this.base;
+    const groundY = this.world.heightAt(x, z, floor);
     if (this.myMesh && this.fpsMode) {
-      // 一人称: 目の高さから自分の向き（A/Dで回す）を見る
+      // 一人称: 目の高さから自分の向き（A/Dで回す）を見る。上階の床板も見える
+      this.followCam.layers.enable(UPPER_LAYER);
       const dx = Math.sin(this.myMesh.rotation.y);
       const dz = Math.cos(this.myMesh.rotation.y);
       // 揺れモーション込みの表示位置ではなく実位置(base)に置く（カメラまで揺れると画面酔いするため）
-      this.followCam.position.set(this.baseX, CONFIG.fpsEyeHeight, this.baseZ);
-      this.followCam.lookAt(this.baseX + dx, CONFIG.fpsEyeHeight - 0.15, this.baseZ + dz);
+      const eye = groundY + CONFIG.fpsEyeHeight;
+      this.followCam.position.set(x, eye, z);
+      this.followCam.lookAt(x + dx, eye - 0.15, z + dz);
     } else if (this.myMesh) {
-      // 揺れモーション込みの表示位置ではなく実位置(base)を追従する（カメラまで揺れると画面酔いするため）
-      const y = this.myMesh.position.y;
-      this.followCam.position.set(this.baseX, y + 8, this.baseZ + 7);
-      this.followCam.lookAt(this.baseX, 0.5, this.baseZ - 1);
+      // 揺れモーション込みの表示位置ではなく実位置(base)を追従する（カメラまで揺れると画面酔いするため）。
+      // 1F（上階の床板の下）にいるときは上階レイヤを描かない
+      const upper = groundY >= UPPER_LAYER_MIN_Y;
+      if (upper) this.followCam.layers.enable(UPPER_LAYER);
+      else this.followCam.layers.disable(UPPER_LAYER);
+      this.followCam.position.set(x, groundY + CAPSULE_Y + 8, z + 7);
+      this.followCam.lookAt(x, groundY + 0.5, z - 1);
     } else {
-      // 観戦者・退場したネズミは俯瞰（フロア全体が入る高さ）
-      this.followCam.position.set(0, 36, 18);
-      this.followCam.lookAt(0, 0, 0);
+      // 観戦者・退場したネズミは俯瞰（フロア全体が入る高さ）。複数フロアではFキーで表示フロアを切替
+      if (this.spectateUpper) this.followCam.layers.enable(UPPER_LAYER);
+      else this.followCam.layers.disable(UPPER_LAYER);
+      const rect = this.stage.floors[0].rect;
+      const cx = (rect.minX + rect.maxX) / 2;
+      const cz = (rect.minZ + rect.maxZ) / 2;
+      const k = Math.max((rect.maxX - rect.minX) / 42, (rect.maxZ - rect.minZ) / 28);
+      this.followCam.position.set(cx, 36 * k, cz + 18 * k);
+      this.followCam.lookAt(cx, 0, cz);
     }
   }
 

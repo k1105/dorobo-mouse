@@ -37,6 +37,8 @@ export interface PhaseState {
   startAt?: number;
   seed?: number;
   round?: Round;
+  /** ステージID（game/stages.ts）。未指定ならスタンダード */
+  stage?: string;
   /** 前ラウンドの終了理由（ラウンド開始時のバナー表示用） */
   note?: string;
   winner?: Team | 'draw';
@@ -50,6 +52,8 @@ export interface PosMsg {
   z: number;
   ry: number;
   t: number;
+  /** フロア番号（複数フロアのステージ用。省略時は1F） */
+  f?: number;
   /** リスポーン待ち中は姿を消す（他クライアントは表示しない） */
   hidden?: boolean;
   /** 盗みモーション中。受信側が揺れをローカルで再生する（低頻度送信+補間だと揺れが潰れるため） */

@@ -2,6 +2,7 @@ import type { NetAdapter } from '../net';
 import type { PhaseState, PlayerInfo, Role } from '../types';
 import { ROLE_LABELS } from '../types';
 import { CONFIG } from '../config';
+import { DEFAULT_STAGE_ID, getStage, STAGES, type StageId } from '../game/stages';
 
 const ROLES: Role[] = ['a1', 'a2', 'b1', 'b2'];
 
@@ -12,6 +13,8 @@ export class Lobby {
   room: string | null = null;
   players: Record<string, PlayerInfo> = {};
   phase: PhaseState = { phase: 'lobby' };
+  /** ホストが選んだステージ（rooms/{room}/stage で全員に共有） */
+  stageId: StageId = DEFAULT_STAGE_ID;
   /** 部屋の状態が変わるたびに呼ばれる（main.tsが画面遷移を判断） */
   onUpdate: ((room: string, players: Record<string, PlayerInfo>, phase: PhaseState) => void) | null =
     null;
@@ -79,6 +82,10 @@ export class Lobby {
         this.renderRoom();
         this.onUpdate?.(room, this.players, this.phase);
       }),
+      this.net.subscribe(`rooms/${room}/stage`, (val) => {
+        this.stageId = getStage(typeof val === 'string' ? val : undefined).id;
+        this.renderRoom();
+      }),
     );
   }
 
@@ -122,6 +129,23 @@ export class Lobby {
     const everyoneHasRole = Object.values(this.players).every((p) => p.role !== 'none');
     const filledCount = Object.values(this.players).filter((p) => p.role !== 'none').length;
 
+    // ステージ選択（ホストだけが変更できる。他のプレイヤーには選ばれたステージが表示される）
+    const stage = getStage(this.stageId);
+    const stageCards = STAGES.map((st) => {
+      const selected = st.id === stage.id;
+      const floors = st.floors.map((f) => f.name).join('・');
+      const camCount = st.floors.reduce((n, f) => n + f.cams.length, 0);
+      return `
+        <button class="stage-card ${selected ? 'selected' : ''}" data-stage="${st.id}" ${
+          isHost && !inGame ? '' : 'disabled'
+        }>
+          <span class="stage-name">${st.name}</span>
+          <span class="stage-desc">${st.desc}</span>
+          <span class="stage-meta">${floors} / カメラ${camCount}台 / NPC${st.npcCount}匹</span>
+        </button>
+      `;
+    }).join('');
+
     this.root.innerHTML = `
       <div class="lobby-panel wide">
         <h1>部屋: ${this.room}</h1>
@@ -130,6 +154,10 @@ export class Lobby {
         <p class="lobby-note">
           ${filledCount < 4 ? '⚠️ 4人未満でも開始できます（動作確認用）' : '✅ 全枠が埋まりました'}
         </p>
+        <div class="stage-select">
+          <h3>🏬 ステージ${isHost ? '（ホストが選択）' : `: ${stage.name}`}</h3>
+          <div class="stage-grid">${stageCards}</div>
+        </div>
         ${
           inGame
             ? '<p class="lobby-note">ゲーム進行中です…</p>'
@@ -146,6 +174,7 @@ export class Lobby {
           <p>🎥 猫: 画面下のカメラマップでカメラ番号をクリック（or 数字キー）してオンライン⇔オフライン切替（同時${CONFIG.maxViewCams}台まで。映像は中央のモニタに表示、カーソルを乗せるとそのモニタが拡大）。映像内の怪しいネズミをクリックでダウト（1ラウンド各${CONFIG.doubtsPerRound}回まで）。的中したネズミは商品を没収されて退場（以降は店内全体を俯瞰で観戦）、NPCなら空振り。ラウンドは時間切れ、またはネズミ全員のダウトに成功した時点で即終了</p>
           <p>💡 オンラインのカメラは球体が赤く発光し、視野に入っている床が明るくなる（ネズミからも「みられている場所」が分かる）</p>
           <p>🐱 猫: カメラマップには自分がオンにしたカメラの視野（赤）・相方がオンにしたカメラの視野（青）と死角が表示される（Mキーで表示/非表示）。🐭 ネズミは同じマップが左下に常時表示され、自分の位置が分かる。ネズミ目線では仲間のネズミが赤く見える（カメラからはNPCと同じ青）</p>
+          <p>🏬 「2フロア」ステージでは東側のスロープで2Fへ上がれる（NPCも行き来する）。出口は1Fのみ。猫のカメラマップは1F・2Fが横に並ぶ</p>
           <p>🏆 2ラウンドで盗んだ商品の累計金額が多いチームの勝ち</p>
         </div>
       </div>
@@ -159,6 +188,11 @@ export class Lobby {
         } satisfies PlayerInfo);
       };
     });
+    this.root.querySelectorAll<HTMLButtonElement>('.stage-card').forEach((b) => {
+      b.onclick = () => {
+        this.net.set(`rooms/${this.room}/stage`, b.dataset.stage);
+      };
+    });
     this.root.querySelector<HTMLButtonElement>('#btn-start')?.addEventListener('click', () => {
       // 前の試合の残骸を消してから開始
       this.net.remove(`rooms/${this.room}/events`);
@@ -169,6 +203,7 @@ export class Lobby {
         round: 1,
         startAt: Date.now() + CONFIG.countdownSec * 1000,
         seed: Math.floor(Math.random() * 2 ** 31),
+        stage: this.stageId,
       } satisfies PhaseState);
     });
   }

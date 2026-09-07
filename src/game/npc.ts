@@ -1,6 +1,6 @@
 import { CONFIG } from '../config';
 import { mulberry32 } from './rng';
-import type { NavGrid } from './nav';
+import type { NavGrid, NavNode } from './nav';
 
 interface Segment {
   t0: number;
@@ -9,12 +9,15 @@ interface Segment {
   z0: number;
   x1: number;
   z1: number;
+  /** 終点のフロア。スロープ上では位置から高さを補間するのでフロア番号は目安 */
+  layer: number;
 }
 
 /**
  * NPCネズミの決定論的シミュレーション。
  * 同じseedなら全クライアントで posAt(t) が同じ値を返すため、位置の通信同期が不要。
  * 移動は歩行グリッド（NavGrid）上のBFS経路に沿うため、棚を貫通しない。
+ * 複数フロアのステージではスロープを通って上下階を行き来する。
  */
 export class NpcSim {
   private rng: () => number;
@@ -44,16 +47,17 @@ export class NpcSim {
       z0: start.z,
       x1: start.x,
       z1: start.z,
+      layer: start.layer,
     });
     this.genUntil = this.segs[0].t1;
   }
 
-  private lastPos(): { x: number; z: number } {
+  private lastPos(): NavNode {
     const s = this.segs[this.segs.length - 1];
-    return { x: s.x1, z: s.z1 };
+    return { x: s.x1, z: s.z1, layer: s.layer };
   }
 
-  private walkTo(x: number, z: number, speedMult = 1): void {
+  private walkTo(x: number, z: number, layer: number, speedMult = 1): void {
     const from = this.lastPos();
     const dist = Math.hypot(x - from.x, z - from.z);
     if (dist < 0.01) return;
@@ -65,6 +69,7 @@ export class NpcSim {
       z0: from.z,
       x1: x,
       z1: z,
+      layer,
     });
     this.genUntil += dur;
   }
@@ -78,18 +83,18 @@ export class NpcSim {
       z0: p.z,
       x1: p.x,
       z1: p.z,
+      layer: p.layer,
     });
     this.genUntil += sec;
   }
 
   /** 目的地まで経路に沿って歩く。中継点に少しゆらぎを入れてロボットっぽさを消す */
-  private walkPath(destX: number, destZ: number, speedMult: number): void {
-    const from = this.lastPos();
-    const pts = this.nav.path(from.x, from.z, destX, destZ);
+  private walkPath(dest: NavNode, speedMult: number): void {
+    const pts = this.nav.path(this.lastPos(), dest);
     for (const p of pts) {
       const jx = (this.rng() - 0.5) * 0.3;
       const jz = (this.rng() - 0.5) * 0.3;
-      this.walkTo(p.x + jx, p.z + jz, speedMult);
+      this.walkTo(p.x + jx, p.z + jz, p.layer, speedMult);
     }
   }
 
@@ -109,9 +114,8 @@ export class NpcSim {
   private genBrowse(): void {
     const steps = 1 + Math.floor(this.rng() * 2);
     for (let i = 0; i < steps; i++) {
-      const cur = this.lastPos();
-      const dest = this.nav.randomNodeNear(cur.x, cur.z, 6, this.rng);
-      this.walkPath(dest.x, dest.z, 0.6 + this.rng() * 0.25);
+      const dest = this.nav.randomNodeNear(this.lastPos(), 6, this.rng);
+      this.walkPath(dest, 0.6 + this.rng() * 0.25);
       this.pause((0.5 + this.rng() * 2) * this.pauseScale);
     }
   }
@@ -119,7 +123,7 @@ export class NpcSim {
   /** 別の売り場を見に行く */
   private genTrip(speedMult: number): void {
     const dest = this.nav.randomNode(this.rng);
-    this.walkPath(dest.x, dest.z, speedMult);
+    this.walkPath(dest, speedMult);
     this.pause((1 + this.rng() * 4) * this.pauseScale); // 棚の前で品定め
   }
 
@@ -127,8 +131,8 @@ export class NpcSim {
     while (this.genUntil < t + 5) this.genNextTrip();
   }
 
-  /** 経過時間 t 秒での位置と向きを返す */
-  posAt(t: number): { x: number; z: number; ry: number } {
+  /** 経過時間 t 秒での位置・向き・フロアを返す（高さは world.heightAt で求める） */
+  posAt(t: number): { x: number; z: number; ry: number; layer: number } {
     this.ensure(t);
     // 前回のインデックスから前方に探す（tは単調増加なのでO(1)）
     if (this.searchIdx >= this.segs.length || this.segs[this.searchIdx].t0 > t) {
@@ -148,7 +152,7 @@ export class NpcSim {
     const dx = s.x1 - s.x0;
     const dz = s.z1 - s.z0;
     const ry = dx * dx + dz * dz > 0.0001 ? Math.atan2(dx, dz) : 0;
-    return { x, z, ry };
+    return { x, z, ry, layer: s.layer };
   }
 }
 

@@ -6,8 +6,6 @@ export const CONFIG = {
   stealRadius: 2.0,
   /** ネズミの移動速度 */
   mouseSpeed: 3.2,
-  /** NPCネズミの数 */
-  npcCount: 50,
   /** NPCの歩行速度の範囲（個体差） */
   npcSpeedMin: 1.6,
   npcSpeedMax: 3.0,
