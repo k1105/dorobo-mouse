@@ -106,6 +106,11 @@ export interface World {
 export const UPPER_LAYER = 1;
 /** 動くもの（NPC・他プレイヤー）をどの高さから UPPER_LAYER に入れるか */
 export const UPPER_LAYER_MIN_Y = 2.0;
+/**
+ * プレイヤー名ラベルのレイヤ。ネズミ役（泥棒チーム）のクライアントの追従・一人称カメラだけが描画し、
+ * 監視カメラ・観戦には映さない（名前で仲間を見分ける＝猫からは見分けがつかない）
+ */
+export const LABEL_LAYER = 2;
 /** ネズミのカプセルの足元から中心までの高さ（makeCapsule の position.y） */
 export const CAPSULE_Y = 0.7;
 
@@ -379,7 +384,7 @@ export function buildWorld(scene: THREE.Scene, seed: number, stage: StageDef): W
       const pos = new THREE.Vector3(def.x, f.y + CAM_Y, def.z);
       camPositions.push(pos);
       const cam = new THREE.PerspectiveCamera(72, 16 / 9, 0.1, 80);
-      cam.layers.enableAll();
+      cam.layers.enable(UPPER_LAYER); // 上階は映すが、名前ラベル（LABEL_LAYER）は映さない
       cam.position.copy(pos);
       cam.lookAt(def.aimX, f.y + 0.4, def.aimZ);
       cctvCams.push(cam);
@@ -716,14 +721,77 @@ export function castRay(
   return best;
 }
 
-/** ネズミ用カプセルを作る（プレイヤーとNPCは同一形状。色は視点によって変える） */
+/**
+ * カプセルの頭上に出すプレイヤー名のラベル（スプライト）。カプセルの子にして追従させる。
+ * LABEL_LAYER に置くので、レイヤを有効にしたカメラでしか見えない
+ */
+export function makeNameLabel(name: string): THREE.Sprite {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 64;
+  const ctx = canvas.getContext('2d')!;
+  ctx.font = 'bold 30px "Hiragino Sans", "Noto Sans JP", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = 'rgba(0,0,0,0.75)';
+  ctx.strokeText(name, 128, 32, 240);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(name, 128, 32, 240);
+  const tex = new THREE.CanvasTexture(canvas);
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }),
+  );
+  sprite.scale.set(2.0, 0.5, 1);
+  sprite.position.y = 1.2;
+  sprite.layers.set(LABEL_LAYER);
+  return sprite;
+}
+
+/**
+ * ネズミ用カプセルを作る（プレイヤーとNPCは同一形状。色はパレットから）
+ *
+ * 向き（rotation.y）が分かるように、前方（ローカル +z）に鼻先・目、頭頂に耳を付ける。
+ * 耳と鼻先は本体と同じマテリアルを共有しているので、本体の色を変えれば一緒に変わる。
+ * 返り値の Mesh が本体で、パーツは子オブジェクト。
+ */
 export function makeCapsule(color: number = COLORS.mouse): THREE.Mesh {
   const radius = 0.35;
   const height = 0.7;
-  const mesh = new THREE.Mesh(
-    new THREE.CapsuleGeometry(radius, height, 6, 16),
-    new THREE.MeshStandardMaterial({ color }),
-  );
+  const bodyMat = new THREE.MeshStandardMaterial({ color });
+  const mesh = new THREE.Mesh(new THREE.CapsuleGeometry(radius, height, 6, 16), bodyMat);
   mesh.position.y = CAPSULE_Y;
+
+  const darkMat = new THREE.MeshStandardMaterial({ color: 0x222222 });
+  const headY = height / 2 + radius * 0.35; // 上側の半球のやや上寄り
+
+  // 鼻先: 前方に突き出す円錐。ConeGeometry は +y 向きなので +z に倒す
+  const snout = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.32, 12), bodyMat);
+  snout.rotation.x = Math.PI / 2;
+  snout.position.set(0, headY - 0.06, radius + 0.1);
+  mesh.add(snout);
+
+  // 鼻の先端（黒）
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), darkMat);
+  nose.position.set(0, headY - 0.06, radius + 0.27);
+  mesh.add(nose);
+
+  // 目（黒）: 前面の左右
+  const eyeGeo = new THREE.SphereGeometry(0.05, 8, 8);
+  for (const sx of [-1, 1]) {
+    const eye = new THREE.Mesh(eyeGeo, darkMat);
+    eye.position.set(sx * 0.13, headY + 0.06, radius * 0.9);
+    mesh.add(eye);
+  }
+
+  // 耳: 頭頂の左右に薄い円盤。正面から見て板になるよう軸を z 向きに倒す（両面から見えるよう厚みを持たせる）
+  const earGeo = new THREE.CylinderGeometry(0.14, 0.14, 0.05, 16);
+  for (const sx of [-1, 1]) {
+    const ear = new THREE.Mesh(earGeo, bodyMat);
+    ear.rotation.x = Math.PI / 2;
+    ear.position.set(sx * 0.26, height / 2 + radius + 0.02, 0);
+    mesh.add(ear);
+  }
+
   return mesh;
 }

@@ -348,6 +348,11 @@ export class CamMapView {
     this.root.classList.toggle('hidden');
   }
 
+  /** ステージ紹介中など、Mキーの表示状態とは別にパネルごと隠す */
+  setVisible(visible: boolean): void {
+    this.root.classList.toggle('intro-hidden', !visible);
+  }
+
   dispose(): void {
     this.root.remove();
   }
@@ -379,7 +384,7 @@ export class MiniMapView {
     this.dpr = this.base.canvas.width / this.base.cssW;
   }
 
-  /** 自分の位置・向き（ry: Three.jsのY回転、前方=(sin ry, cos ry)）とフロアを描く。hidden=リスポーン待ち中 */
+  /** 自分の位置・向き（ry: Three.jsのY回転、前方=(sin ry, cos ry)）とフロアを描く。hidden=退場済み */
   update(x: number, z: number, ry: number, hidden: boolean, floor: number): void {
     const ctx = this.ctx;
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -409,6 +414,11 @@ export class MiniMapView {
     ctx.strokeStyle = '#fff';
     ctx.lineWidth = 2;
     ctx.stroke();
+  }
+
+  /** ステージ紹介中など、一時的に隠す */
+  setVisible(visible: boolean): void {
+    this.root.classList.toggle('intro-hidden', !visible);
   }
 
   dispose(): void {

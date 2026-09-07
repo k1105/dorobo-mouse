@@ -1,4 +1,22 @@
-import type { Team } from '../types';
+import { TEAM_LABELS, type SetResult, type Team } from '../types';
+
+/** リザルト表示の内容（セット終了 / 試合終了） */
+export interface EndOptions {
+  heading: string;
+  winner: Team | 'draw';
+  scoreA: number;
+  scoreB: number;
+  reason: string;
+  /** ここまでの獲得セット数 */
+  tally: { a: number; b: number };
+  totalSets: number;
+  /** 試合終了時: 各セットのスコア一覧 */
+  results?: SetResult[];
+  /** 試合終了（最終成績）か。false ならセット終了で、next の案内を出す */
+  final?: boolean;
+  next?: string;
+  onLobby?: () => void;
+}
 
 /** ゲーム中のHUD（DOMオーバーレイ） */
 export class Hud {
@@ -54,8 +72,8 @@ export class Hud {
   }
 
   /** ラウンドとチームスコア（盗んだ商品の累計金額）の表示 */
-  setScore(round: number, scoreA: number, scoreB: number): void {
-    this.scoreEl.textContent = `${round === 1 ? '前半' : '後半'}  A ${scoreA}円 - ${scoreB}円 B`;
+  setScore(round: number, scoreA: number, scoreB: number, setLabel = ''): void {
+    this.scoreEl.textContent = `${setLabel ? `${setLabel} ` : ''}${round === 1 ? '前半' : '後半'}  A ${scoreA}円 - ${scoreB}円 B`;
   }
 
   /** 役割ごとの補助情報（ネズミ: 所持数 / 猫: ダウト残数） */
@@ -126,6 +144,11 @@ export class Hud {
     this.camToggleBtn.classList.toggle('active', fps);
   }
 
+  /** ステージ紹介中は操作UI（盗む・視点切替）を隠して映像だけにする */
+  setIntroMode(on: boolean): void {
+    this.root.classList.toggle('intro', on);
+  }
+
   /** 役割表示を差し替える（退場→観戦など） */
   setRole(label: string): void {
     this.roleEl.textContent = label;
@@ -180,27 +203,99 @@ export class Hud {
     setTimeout(() => el.remove(), durationMs);
   }
 
-  showEnd(
-    winner: Team | 'draw',
-    reason: string,
-    scoreA: number,
-    scoreB: number,
-    onLobby: () => void,
-  ): void {
+  /**
+   * セット終了・試合終了の演出。見出し → 両陣営のスコアがカウントアップしながらバーが伸びる →
+   * 勝者を大きく発表（紙吹雪）→ セット終了なら次のセットの案内、試合終了なら最終成績（セット数と各セット）とロビーへ戻るボタン
+   */
+  showEnd(o: EndOptions): void {
     if (this.endEl) return;
     this.endEl = document.createElement('div');
     this.endEl.className = 'end-overlay';
-    const title = winner === 'draw' ? '🤝 引き分け！' : `🏆 チーム${winner}の勝ち！`;
+    const { winner } = o;
+    const multi = o.totalSets > 1;
+    const title =
+      winner === 'draw'
+        ? '引き分け！'
+        : o.final
+          ? `${TEAM_LABELS[winner]}の勝利！`
+          : `${TEAM_LABELS[winner]}がセット獲得！`;
+    const cls = (t: Team) => (winner === 'draw' ? '' : winner === t ? 'win' : 'lose');
+    const rows = (o.results ?? [])
+      .map((r, i) => {
+        const w = r.scoreA > r.scoreB ? 'a' : r.scoreB > r.scoreA ? 'b' : '';
+        return `<div class="end-row ${w}"><span>第${i + 1}セット</span><b class="ra">${r.scoreA}円</b><span class="dash">-</span><b class="rb">${r.scoreB}円</b></div>`;
+      })
+      .join('');
     this.endEl.innerHTML = `
       <div class="end-panel">
-        <h1>${title}</h1>
-        <p class="end-score">A ${scoreA}円 - ${scoreB}円 B</p>
-        <p>${reason}</p>
-        <button class="btn primary" id="btn-lobby">ロビーに戻る</button>
+        <div class="end-title">${o.heading}</div>
+        <div class="end-scores">
+          <div class="end-team a ${cls('A')}">
+            <div class="end-team-name">${TEAM_LABELS.A}</div>
+            <div class="end-num"><span data-count="${o.scoreA}">0</span><small>円</small></div>
+            <div class="end-bar"><i></i></div>
+          </div>
+          <div class="end-vs">vs</div>
+          <div class="end-team b ${cls('B')}">
+            <div class="end-team-name">${TEAM_LABELS.B}</div>
+            <div class="end-num"><span data-count="${o.scoreB}">0</span><small>円</small></div>
+            <div class="end-bar"><i></i></div>
+          </div>
+        </div>
+        ${o.final && multi ? `<div class="end-rows">${rows}</div>` : ''}
+        <div class="end-winner ${winner === 'draw' ? 'draw' : winner.toLowerCase()}">
+          ${multi ? `<div class="end-tally">セット <b class="ta">${o.tally.a}</b> - <b class="tb">${o.tally.b}</b>${o.final ? '' : ` <small>（全${o.totalSets}セット）</small>`}</div>` : ''}
+          <h1>${winner === 'draw' ? '🤝' : '🏆'} ${title}</h1>
+          <div class="end-reason">${o.reason}</div>
+        </div>
+        <div class="end-actions">
+          ${o.final ? '<button class="btn" id="btn-lobby">ロビーに戻る</button>' : `<div class="end-next">${o.next ?? ''}</div>`}
+        </div>
       </div>
     `;
     this.root.appendChild(this.endEl);
-    this.endEl.querySelector<HTMLButtonElement>('#btn-lobby')!.onclick = onLobby;
+    const panel = this.endEl.querySelector<HTMLDivElement>('.end-panel')!;
+    const overlay = this.endEl;
+    const lobbyBtn = this.endEl.querySelector<HTMLButtonElement>('#btn-lobby');
+    if (lobbyBtn && o.onLobby) lobbyBtn.onclick = o.onLobby;
+
+    // 段階的に見せる
+    const max = Math.max(1, o.scoreA, o.scoreB);
+    window.setTimeout(() => panel.classList.add('s1'), 100);
+    window.setTimeout(() => {
+      panel.classList.add('s2');
+      const bars = panel.querySelectorAll<HTMLElement>('.end-bar i');
+      bars[0].style.width = `${(o.scoreA / max) * 100}%`;
+      bars[1].style.width = `${(o.scoreB / max) * 100}%`;
+      const nums = panel.querySelectorAll<HTMLSpanElement>('[data-count]');
+      const t0 = performance.now();
+      const dur = 1400;
+      const tick = () => {
+        const k = Math.min(1, (performance.now() - t0) / dur);
+        const e = 1 - Math.pow(1 - k, 3);
+        nums.forEach((el) => {
+          el.textContent = String(Math.round(Number(el.dataset.count) * e));
+        });
+        if (k < 1 && this.endEl) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }, 900);
+    window.setTimeout(() => {
+      panel.classList.add('s3');
+      if (winner !== 'draw' && (o.final || !multi)) {
+        const colors = winner === 'A' ? ['#ff8d80', '#e0453a', '#ffb300', '#fff'] : ['#8fe0ff', '#4fc3f7', '#ffb300', '#fff'];
+        for (let i = 0; i < 60; i++) {
+          const c = document.createElement('span');
+          c.className = 'confetti';
+          c.style.left = `${Math.random() * 100}%`;
+          c.style.background = colors[i % colors.length];
+          c.style.animationDuration = `${2.4 + Math.random() * 2}s`;
+          c.style.animationDelay = `${Math.random() * 1.2}s`;
+          c.style.transform = `rotate(${Math.random() * 360}deg)`;
+          overlay.appendChild(c);
+        }
+      }
+    }, 2700);
   }
 
   dispose(): void {

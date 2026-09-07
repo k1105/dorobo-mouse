@@ -51,122 +51,600 @@ body,
   outline: 2px solid #ffb300;
 }
 
-/* ---- ロビー ---- */
+/* =========================================================
+   ロビー（タイトル / 名前 / ルーム一覧 / ルーム / 着せ替え）
+   横長PC前提。1枚のカードに詰めず、画面を左右に使う。
+   色: 監視室の暗いネイビーを基調に、アクセントはゲーム内と同じ黄色1つ。
+   ========================================================= */
 .lobby {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   overflow-y: auto;
-  background: radial-gradient(circle at 50% 30%, #2a2a33, #16161c);
+  background:
+    radial-gradient(ellipse at 18% 12%, rgba(255, 179, 0, 0.09), transparent 42%),
+    radial-gradient(ellipse at 85% 90%, rgba(79, 195, 247, 0.08), transparent 40%),
+    linear-gradient(#171b23, #10131a);
+  color: #e9ecf1;
   z-index: 10;
 }
-.lobby-panel {
-  background: #24242c;
-  border-radius: 16px;
-  padding: 32px 40px;
-  max-width: 440px;
-  width: 92%;
+.scr {
+  min-height: 100%;
+  padding: 36px 56px 40px;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  gap: 20px;
 }
-.lobby-panel.wide {
-  max-width: 640px;
+.scr-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
 }
-.lobby-panel h1 {
-  font-size: 26px;
-  text-align: center;
+.scr-head h1 {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+}
+.scr-head .crumb {
+  font-size: 13px;
+  color: #9aa3b2;
+}
+.scr-head .crumb b {
+  color: #ffb300;
+  font-weight: 700;
 }
 .mode-badge {
-  text-align: center;
   font-size: 12px;
-  color: #aaa;
+  color: #8a93a3;
+}
+.link-btn {
+  margin-left: 10px;
+  background: none;
+  border: none;
+  color: #9aa3b2;
+  font-size: 12px;
+  font-family: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.link-btn:hover {
+  color: #ffb300;
 }
 .lobby-desc {
-  font-size: 13px;
-  color: #bbb;
-  line-height: 1.7;
+  font-size: 14px;
+  color: #b6bdc9;
+  line-height: 1.8;
+  max-width: 34em;
 }
 .lobby-note {
   font-size: 13px;
-  color: #ccc;
-  text-align: center;
+  color: #c9cfd9;
 }
-.lobby-panel label {
+.lobby-note.dim {
+  color: #8a93a3;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.btn-row {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-  font-size: 13px;
-  color: #ccc;
-}
-.lobby-panel input {
-  padding: 10px;
-  border-radius: 8px;
-  border: 1px solid #444;
-  background: #17171c;
-  color: #eee;
-  font-size: 16px;
-}
-
-.role-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
-.role-slot {
-  border: 2px solid transparent;
-  border-radius: 12px;
-  padding: 14px;
+.btn.big {
+  font-size: 22px;
+  padding: 16px 64px;
+  border-radius: 14px;
+  background: #ffb300;
+  color: #1a1400;
+  font-weight: 800;
+}
+.btn.big:hover {
+  filter: brightness(1.08);
+}
+.section-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: #e9ecf1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.section-title small {
+  font-size: 12px;
+  font-weight: 400;
+  color: #8a93a3;
+}
+.panel {
+  background: rgba(30, 36, 48, 0.85);
+  border: 1px solid #2c3442;
+  border-radius: 14px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.lobby input[type='text'],
+.lobby input:not([type]) {
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid #3a4453;
+  background: #0f1319;
+  color: #eee;
+  font-size: 18px;
+  font-family: inherit;
+  outline: none;
+}
+.lobby input:focus {
+  border-color: #ffb300;
+}
+.lobby label {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  cursor: pointer;
-  font-family: inherit;
+  font-size: 13px;
+  color: #b6bdc9;
+}
+
+/* ---- タイトル（全画面ヒーロー。背景は3Dの売り場をうろつくカプセルたち） ---- */
+.scr-title {
+  position: relative;
+  height: 100%;
+  min-height: 100%;
+  padding: 0;
+  justify-content: center;
+  align-items: center;
+  overflow: hidden;
+}
+.title-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+.title-bg canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.title-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse at 50% 55%, rgba(16, 19, 26, 0.2), rgba(16, 19, 26, 0.7) 78%),
+    linear-gradient(rgba(16, 19, 26, 0.55), transparent 32%, transparent 68%, rgba(16, 19, 26, 0.85));
+}
+.title-center {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 26px;
+  text-align: center;
+}
+.title-kicker {
+  font-size: 16px;
+  color: #d6dbe4;
+  letter-spacing: 0.06em;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8);
+}
+.title-logo {
+  font-size: clamp(56px, 8.5vw, 124px);
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  white-space: nowrap;
   color: #fff;
+  text-shadow:
+    0 4px 0 #c98700,
+    0 10px 40px rgba(0, 0, 0, 0.7);
 }
-.role-slot.team-a {
-  background: #2c4a6e;
+.title-center .btn.big {
+  margin-top: 8px;
+  font-size: 26px;
+  padding: 18px 88px;
+  box-shadow: 0 12px 40px rgba(255, 179, 0, 0.35);
 }
-.role-slot.team-b {
-  background: #6e2c68;
+.title-mode {
+  position: absolute;
+  bottom: 22px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  z-index: 1;
 }
-.role-slot.mine {
-  border-color: #ffb300;
+
+/* ---- 名前入力 ---- */
+.scr-name {
+  justify-content: center;
 }
-.role-slot.taken {
-  opacity: 0.6;
-  cursor: default;
+.name-box {
+  width: min(520px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
-.role-name {
-  font-weight: bold;
-  font-size: 15px;
+.name-box h1 {
+  font-size: 30px;
+  font-weight: 800;
 }
-.role-hint {
-  font-size: 11px;
-  color: #ccc;
+
+/* ---- ルーム一覧（一覧のみ。新規作成は右下のボタンからモーダルで） ---- */
+.rooms-panel {
+  max-width: 900px;
+  width: 100%;
+  margin: 0 auto;
+  min-height: 320px;
 }
-/* ---- ステージ選択（ロビー。ホストのみ変更可） ---- */
-.stage-select h3 {
-  font-size: 14px;
-  color: #ddd;
-  margin-bottom: 8px;
+.room-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 62vh;
+  overflow-y: auto;
 }
-.stage-grid {
+.fab {
+  position: fixed;
+  right: 40px;
+  bottom: 36px;
+  z-index: 3;
+  padding: 16px 28px;
+  border: none;
+  border-radius: 999px;
+  background: #ffb300;
+  color: #1a1400;
+  font-size: 17px;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+  box-shadow: 0 10px 30px rgba(255, 179, 0, 0.35);
+}
+.fab:hover {
+  filter: brightness(1.08);
+}
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(6, 8, 12, 0.7);
+  backdrop-filter: blur(3px);
+}
+.modal {
+  width: min(760px, 92vw);
+  background: #1e2430;
+  border: 1px solid #2c3442;
+  border-radius: 16px;
+  padding: 26px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.modal h2 {
+  font-size: 22px;
+  font-weight: 800;
+}
+.stage-row {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px;
 }
-.stage-card {
-  border: 2px solid transparent;
+.modal-actions {
+  justify-content: flex-end;
+}
+.set-options {
+  display: flex;
+  gap: 8px;
+}
+.seg {
+  min-width: 56px;
+  padding: 10px 0;
+  border: 1px solid #3a4453;
   border-radius: 10px;
-  padding: 10px 8px;
+  background: #1a2029;
+  color: #d6dbe4;
+  font-size: 18px;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+}
+.seg.selected {
+  border-color: #ffb300;
+  background: #2b2717;
+  color: #ffb300;
+}
+.set-stages {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  background: #33343d;
+  gap: 6px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+.set-row {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  align-items: center;
+  gap: 10px;
+}
+.set-label {
+  font-size: 13px;
+  color: #b6bdc9;
+  font-weight: 700;
+}
+.set-picks {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.stage-pick {
+  padding: 8px 6px;
+  border: 1px solid #3a4453;
+  border-radius: 8px;
+  background: #1a2029;
+  color: #d6dbe4;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+}
+.stage-pick.selected {
+  border-color: #ffb300;
+  background: #2b2717;
+  color: #ffb300;
+}
+.room-card {
+  display: grid;
+  grid-template-columns: 110px 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid #2c3442;
+  border-radius: 12px;
+  background: #1a2029;
+  color: #fff;
+  font-family: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.room-card:hover {
+  border-color: #ffb300;
+  background: #202836;
+}
+.room-code {
+  font-weight: 800;
+  font-size: 22px;
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+}
+.room-members {
+  font-size: 13px;
+  color: #b6bdc9;
+}
+.room-count {
+  font-size: 12px;
+  color: #9aa3b2;
+  background: #0f1319;
+  padding: 4px 10px;
+  border-radius: 999px;
+}
+.room-create {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.room-empty {
+  padding: 28px 16px;
+  border: 1px dashed #3a4453;
+  border-radius: 12px;
+  color: #8a93a3;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* ---- ルーム（3カラム: 陣営 / 着せ替え / ステージと開始） ---- */
+.room-body {
+  width: min(1000px, 100%);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.team-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 40px;
+  padding: 16px 0 8px;
+}
+.team-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.team-name {
+  font-weight: 800;
+  font-size: 22px;
+}
+.team-card.team-a .team-name {
+  color: #ff8d80;
+}
+.team-card.team-b .team-name {
+  color: #8fe0ff;
+}
+.team-name small {
+  font-size: 12px;
+  font-weight: 400;
+  color: #ffb300;
+  margin-left: 6px;
+}
+.team-hint {
+  font-size: 12px;
+  color: #9aa3b2;
+}
+.team-slots {
+  display: flex;
+  justify-content: center;
+  gap: 36px;
+  padding: 14px 0 2px;
+}
+/* カプセル型の枠。空きは点線の輪郭、埋まるとプレイヤーの色 */
+.cap-slot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 4px;
+  border-radius: 12px;
+  color: #ddd;
+  font-family: inherit;
+  cursor: pointer;
+}
+.cap-slot:disabled {
+  cursor: default;
+}
+.cap {
+  width: 96px;
+  height: 168px;
+  border-radius: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 44px;
+  color: #aaa;
+  box-shadow: inset 0 -22px 30px rgba(0, 0, 0, 0.32), inset 0 16px 20px rgba(255, 255, 255, 0.22), 0 14px 30px rgba(0, 0, 0, 0.4);
+  transition: transform 0.15s;
+}
+.cap-slot.empty:hover:not(:disabled) .cap {
+  transform: translateY(-4px);
+}
+.cap-slot.empty .cap {
+  border: 2px dashed rgba(255, 255, 255, 0.4);
+  background: rgba(0, 0, 0, 0.25);
+  box-shadow: none;
+}
+.cap-slot.empty:hover:not(:disabled) .cap {
+  border-color: #ffb300;
+  color: #ffb300;
+  background: rgba(255, 179, 0, 0.12);
+}
+.cap-slot.me .cap {
+  outline: 4px solid #ffb300;
+  outline-offset: 5px;
+}
+.cap-name {
+  font-size: 15px;
+  font-weight: 700;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cap-slot.empty .cap-name {
+  color: #8a93a3;
+}
+
+/* 着せ替え（中央） */
+.costume {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.costume-slot {
+  display: flex;
+  justify-content: center;
+}
+.costume-preview {
+  width: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  background: radial-gradient(circle at 50% 40%, #3a3f4c, #14171d);
+}
+.costume-preview canvas {
+  display: block;
+  width: 100%;
+  max-height: 340px;
+}
+.palette {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+}
+.swatch {
+  position: relative;
+  height: 46px;
+  border: 3px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 2px;
+  padding: 2px;
+}
+.swatch:hover {
+  filter: brightness(1.15);
+}
+.swatch.selected {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px #ffb300;
+}
+.swatch-tag {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.swatch-tag.me {
+  background: #ffb300;
+  color: #222;
+  font-weight: bold;
+}
+.costume-wait {
+  min-height: 220px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 24px;
+  border: 1px dashed #3a4453;
+  border-radius: 12px;
+  color: #8a93a3;
+  font-size: 13px;
+  line-height: 1.8;
+}
+
+/* ステージ選択と開始（右） */
+.side-col {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.stage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.stage-card {
+  border: 1px solid #2c3442;
+  border-radius: 10px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: #1a2029;
   color: #fff;
   font-family: inherit;
   cursor: pointer;
@@ -174,43 +652,128 @@ body,
 }
 .stage-card:disabled {
   cursor: default;
-  opacity: 0.75;
 }
 .stage-card.selected {
   border-color: #ffb300;
-  background: #4a3f24;
-  opacity: 1;
+  background: #2b2717;
 }
 .stage-name {
-  font-weight: bold;
+  font-weight: 700;
   font-size: 14px;
 }
 .stage-desc {
   font-size: 11px;
-  color: #ccc;
-  line-height: 1.4;
+  color: #b6bdc9;
+  line-height: 1.5;
 }
 .stage-meta {
   font-size: 10px;
-  color: #aaa;
+  color: #8a93a3;
 }
-
-.role-owner {
-  font-size: 12px;
-  color: #ddd;
+.start-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: stretch;
 }
-
-.controls-help {
-  border-top: 1px solid #3a3a44;
-  padding-top: 12px;
+.start-box .btn.primary {
+  background: #ffb300;
+  color: #1a1400;
+  font-weight: 800;
+  font-size: 18px;
+  padding: 14px;
+}
+.start-box .btn.primary:disabled {
+  background: #3a4453;
+  color: #9aa3b2;
+  opacity: 1;
+}
+.status-line {
   font-size: 12px;
-  color: #999;
+  color: #9aa3b2;
+  text-align: center;
+}
+.modal.rules {
+  max-height: 84vh;
+  overflow-y: auto;
+}
+.modal.rules p {
+  font-size: 13px;
+  color: #b6bdc9;
   line-height: 1.8;
 }
-.controls-help h3 {
-  font-size: 13px;
-  color: #ccc;
-  margin-bottom: 4px;
+.link-btn.pill {
+  text-decoration: none;
+  border: 1px solid #3a4453;
+  border-radius: 999px;
+  padding: 4px 12px;
+  color: #d6dbe4;
+}
+.link-btn.pill:hover {
+  border-color: #ffb300;
+}
+/* 画面下部の固定バー（開始ボタンと状態） */
+.room-footer {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  padding: 16px 56px 22px;
+  background: linear-gradient(transparent, rgba(16, 19, 26, 0.9) 35%);
+}
+.room-footer-inner {
+  width: min(1000px, 100%);
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.status-block {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.status-block .status-line {
+  text-align: left;
+  font-size: 14px;
+  color: #d6dbe4;
+}
+.status-block .status-line.dim {
+  font-size: 12px;
+  color: #8a93a3;
+}
+.room-footer .btn.big {
+  padding: 16px 56px;
+}
+
+/* 攻守交代の着せ替え・作戦会議 */
+.costume-phase {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 24px;
+  align-items: start;
+}
+.costume-timer {
+  font-size: 15px;
+  color: #b6bdc9;
+}
+.costume-timer-num {
+  display: block;
+  font-size: 64px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  color: #ffb300;
+  line-height: 1.1;
+}
+
+@media (max-width: 1000px) {
+  .team-grid,
+  .costume-phase {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ---- HUD ---- */
@@ -228,6 +791,7 @@ body,
   display: flex;
   gap: 20px;
   align-items: center;
+  white-space: nowrap;
   background: rgba(0, 0, 0, 0.55);
   padding: 8px 20px;
   border-radius: 10px;
@@ -420,33 +984,262 @@ body,
   }
 }
 
-/* ---- 終了画面 ---- */
+/* ---- 終了画面（演出: 見出し → スコアのカウントアップとバー → 勝者の発表と紙吹雪） ---- */
 .end-overlay {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.65);
+  background: rgba(8, 10, 14, 0);
   pointer-events: auto;
+  overflow: hidden;
+  animation: end-fade 0.6s ease-out forwards;
+}
+@keyframes end-fade {
+  to {
+    background: rgba(8, 10, 14, 0.88);
+  }
 }
 .end-panel {
-  background: #24242c;
-  border-radius: 16px;
-  padding: 40px 60px;
-  text-align: center;
+  width: min(880px, 92vw);
   display: flex;
   flex-direction: column;
-  gap: 18px;
+  align-items: center;
+  gap: 26px;
+  text-align: center;
 }
-.end-panel h1 {
-  font-size: 32px;
+.end-title {
+  font-size: 22px;
+  letter-spacing: 0.3em;
+  color: #d6dbe4;
+  opacity: 0;
+  transform: translateY(12px);
+  transition: opacity 0.5s, transform 0.5s;
+}
+.end-panel.s1 .end-title {
+  opacity: 1;
+  transform: none;
+}
+.end-scores {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 1fr 64px 1fr;
+  align-items: center;
+  gap: 18px;
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+.end-panel.s2 .end-scores {
+  opacity: 1;
+}
+.end-team {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.end-team.a {
+  align-items: flex-end;
+  text-align: right;
+}
+.end-team.b {
+  align-items: flex-start;
+  text-align: left;
+}
+.end-team-name {
+  font-size: 18px;
+  font-weight: 800;
+}
+.end-team.a .end-team-name {
+  color: #ff7b6e;
+}
+.end-team.b .end-team-name {
+  color: #7fd4ff;
+}
+.end-num {
+  font-size: 64px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.end-num small {
+  font-size: 22px;
+  font-weight: 700;
+  margin-left: 4px;
+}
+.end-bar {
+  width: 100%;
+  height: 14px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+  display: flex;
+}
+.end-team.a .end-bar {
+  justify-content: flex-end;
+}
+.end-bar i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 7px;
+  transition: width 1.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.end-team.a .end-bar i {
+  background: linear-gradient(90deg, #ff9a8b, #e0453a);
+}
+.end-team.b .end-bar i {
+  background: linear-gradient(90deg, #4fc3f7, #8fe0ff);
+}
+.end-vs {
+  font-size: 22px;
+  font-weight: 900;
+  color: #6f7887;
+}
+.end-winner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.35s, transform 0.5s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+.end-panel.s3 .end-winner {
+  opacity: 1;
+  transform: none;
+}
+.end-winner h1 {
+  font-size: clamp(40px, 6vw, 72px);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  text-shadow: 0 6px 30px rgba(0, 0, 0, 0.6);
+}
+.end-winner.a h1 {
+  color: #ff8d80;
+}
+.end-winner.b h1 {
+  color: #8fe0ff;
+}
+.end-winner.draw h1 {
   color: #ffb300;
 }
-.end-score {
-  font-size: 26px;
-  font-weight: bold;
+.end-reason {
+  font-size: 14px;
+  color: #b6bdc9;
+}
+.end-actions {
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+.end-panel.s3 .end-actions {
+  opacity: 1;
+}
+.end-actions .btn {
+  background: #ffb300;
+  color: #1a1400;
+  font-weight: 800;
+  font-size: 18px;
+  padding: 14px 44px;
+}
+.end-team.lose {
+  opacity: 0.55;
+}
+.end-tally {
+  font-size: 20px;
+  color: #d6dbe4;
+  letter-spacing: 0.1em;
+}
+.end-tally b {
+  font-size: 40px;
+  font-weight: 900;
+  letter-spacing: 0;
+  margin: 0 4px;
+}
+.end-tally .ta {
+  color: #ff8d80;
+}
+.end-tally .tb {
+  color: #8fe0ff;
+}
+.end-tally small {
+  font-size: 13px;
+  color: #9aa3b2;
+}
+.end-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(420px, 100%);
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+.end-panel.s2 .end-rows {
+  opacity: 1;
+}
+.end-row {
+  display: grid;
+  grid-template-columns: 1fr auto 20px auto;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 14px;
+  color: #b6bdc9;
+  padding: 4px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+.end-row b {
   font-variant-numeric: tabular-nums;
+  color: #d6dbe4;
+}
+.end-row.a .ra {
+  color: #ff8d80;
+}
+.end-row.b .rb {
+  color: #8fe0ff;
+}
+.end-next {
+  font-size: 15px;
+  color: #d6dbe4;
+  padding: 12px 22px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.08);
+}
+.end-team.win .end-num {
+  color: #fff;
+}
+/* 紙吹雪 */
+.confetti {
+  position: absolute;
+  top: -20px;
+  width: 10px;
+  height: 16px;
+  border-radius: 2px;
+  opacity: 0.95;
+  animation: confetti-fall linear forwards;
+}
+@keyframes confetti-fall {
+  0% {
+    transform: translateY(0) rotate(0deg);
+  }
+  100% {
+    transform: translateY(110vh) rotate(720deg);
+    opacity: 0.6;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .end-bar i,
+  .end-winner,
+  .end-title,
+  .end-scores,
+  .end-actions {
+    transition: none;
+  }
+  .confetti {
+    display: none;
+  }
 }
 
 /* ---- CCTV（猫チーム） ---- */
@@ -595,4 +1388,16 @@ body,
   display: block;
   margin: 0 8px 8px;
   border-radius: 6px;
+}
+
+.cam-map.intro-hidden {
+  display: none !important;
+}
+.mini-map.intro-hidden {
+  display: none !important;
+}
+.hud.intro .hud-steal-btn,
+.hud.intro .hud-cam-toggle,
+.hud.intro .hud-top {
+  display: none !important;
 }

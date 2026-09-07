@@ -25,8 +25,14 @@ export const CONFIG = {
   posSendHz: 10,
   /** ゲーム開始前カウントダウン（秒） */
   countdownSec: 3,
-  /** 万引き成功（出口通過）からリスポーンまでの待ち時間（秒） */
-  respawnDelaySec: 3,
+  /** 前半開始前のステージ紹介（スイープするカメラ3カット）の長さ（秒） */
+  introSec: 9,
+  /** 攻守交代時の着せ替え・作戦会議の時間（秒） */
+  costumeSec: 60,
+  /** セット終了のリザルト表示から次のセットの準備に移るまでの時間（秒） */
+  setEndSec: 12,
+  /** ルーム作成時に選べるセット数の選択肢 */
+  setOptions: [1, 2, 3, 5] as readonly number[],
   /** ダウト成功演出の表示時間（秒）。この時間が経ってから攻守交代する */
   doubtEffectSec: 2.5,
   /** 追従カメラの視野角（度） */
@@ -39,11 +45,28 @@ export const CONFIG = {
   fpsTurnSpeed: 2.5,
 } as const;
 
+/**
+ * アバター（カプセル）の色パレット。プレイヤーは着せ替えでここから選び、
+ * NPCも同じパレットからseedで配色するため、色ではプレイヤーとNPCを見分けられない
+ */
+export const AVATAR_PALETTE: readonly { name: string; hex: number }[] = [
+  { name: 'レッド', hex: 0xe0453a },
+  { name: 'オレンジ', hex: 0xf28c28 },
+  { name: 'イエロー', hex: 0xf2c94c },
+  { name: 'ライム', hex: 0x8bc34a },
+  { name: 'グリーン', hex: 0x2e9e5b },
+  { name: 'ティール', hex: 0x26a69a },
+  { name: 'スカイ', hex: 0x4fc3f7 },
+  { name: 'ブルー', hex: 0x3b72b0 },
+  { name: 'インディゴ', hex: 0x5c6bc0 },
+  { name: 'パープル', hex: 0x9c5bb5 },
+  { name: 'ピンク', hex: 0xef7fb0 },
+  { name: 'ブラウン', hex: 0x8d6e63 },
+] as const;
+
 export const COLORS = {
-  /** ネズミ（NPC・プレイヤー）の基本色。監視カメラ・観戦視点ではプレイヤーもこの色で、NPCと見分けがつかない */
+  /** 色未設定のプレイヤーのフォールバック色 */
   mouse: 0x3b72b0,
-  /** 泥棒目線（ネズミ役のクライアント）で見たときの泥棒プレイヤーの色。仲間を見分けるための味方色 */
-  thief: 0xe0453a,
   floor: 0xe8e6e2,
   shelf: 0x161616,
   wall: 0xc5c2bd,

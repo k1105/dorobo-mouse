@@ -12,6 +12,17 @@ export const ROLE_LABELS: Record<Role, string> = {
   none: '未選択',
 };
 
+/** 陣営の表示名。先攻=前半にネズミ（チームA）、後攻=前半に猫（チームB） */
+export const TEAM_LABELS: Record<Team, string> = {
+  A: '先攻陣営',
+  B: '後攻陣営',
+};
+
+/** 陣営に属する枠（先着順に埋める） */
+export function rolesOfTeam(team: Team): Role[] {
+  return team === 'A' ? ['a1', 'a2'] : ['b1', 'b2'];
+}
+
 export function teamOf(role: Role): Team | null {
   if (role === 'a1' || role === 'a2') return 'A';
   if (role === 'b1' || role === 'b2') return 'B';
@@ -32,14 +43,55 @@ export interface PlayerInfo {
   name: string;
   role: Role;
   joinedAt: number;
+  /** アバター（カプセル）の色（着せ替えで選ぶ。config.AVATAR_PALETTE の hex） */
+  color?: number;
+}
+
+/** 1セット（前半＋後半）の結果 */
+export interface SetResult {
+  scoreA: number;
+  scoreB: number;
+}
+
+/** ルーム作成時にホストが決める試合構成 */
+export interface MatchConfig {
+  /** セット数（1セット = 前半＋後半の攻守交代1回） */
+  sets: number;
+  /** セットごとのステージID */
+  stages: string[];
+}
+
+/** 各セットの勝敗から獲得セット数を数える（同額は両者に入れない） */
+export function setsWon(results: readonly SetResult[]): { a: number; b: number } {
+  let a = 0;
+  let b = 0;
+  for (const r of results) {
+    if (r.scoreA > r.scoreB) a++;
+    else if (r.scoreB > r.scoreA) b++;
+  }
+  return { a, b };
 }
 
 export interface PhaseState {
-  phase: 'lobby' | 'playing' | 'ended';
+  /**
+   * lobby: ロビー / costume: 着せ替え・作戦会議（until まで。各ラウンドの前） /
+   * playing: ラウンド進行中（startAt から。前半は開始前にステージ紹介＋カウントダウン） /
+   * setEnd: セット終了のリザルト表示（until まで。次のセットがある場合） / ended: 試合終了（最終成績）
+   */
+  phase: 'lobby' | 'costume' | 'playing' | 'setEnd' | 'ended';
   startAt?: number;
+  /** costume / setEnd フェーズの終了時刻 */
+  until?: number;
   seed?: number;
   round?: Round;
-  /** ステージID（game/stages.ts）。未指定ならスタンダード */
+  /** 現在のセット番号（1始まり）と総セット数 */
+  set?: number;
+  sets?: number;
+  /** セットごとのステージID（ルーム作成時の設定を持ち回る） */
+  stages?: string[];
+  /** 終了したセットの結果（進行中のセットは含まない） */
+  results?: SetResult[];
+  /** 現在のセットのステージID（game/stages.ts）。未指定ならスタンダード */
   stage?: string;
   /** 前ラウンドの終了理由（ラウンド開始時のバナー表示用） */
   note?: string;
@@ -55,6 +107,9 @@ export interface PhaseState {
  * それより十分古い startAt の 'playing' は途中で全員が抜けた試合とみなしてロビー扱いにする
  */
 export function isStalePhase(phase: PhaseState): boolean {
+  if (phase.phase === 'costume' || phase.phase === 'setEnd') {
+    return !!phase.until && Date.now() - phase.until > 30 * 1000;
+  }
   if (phase.phase !== 'playing' || !phase.startAt) return false;
   return Date.now() - phase.startAt > (CONFIG.countdownSec + CONFIG.roundTimeSec + 30) * 1000;
 }
@@ -72,9 +127,17 @@ export interface PosMsg {
   sway?: boolean;
 }
 
+/** イベント共通: どのセット・ラウンドのものか（set は省略時1） */
+interface EventBase {
+  by: string;
+  round: Round;
+  set?: number;
+  at: number;
+}
+
 export type GameEvent =
-  | { type: 'steal'; by: string; spotIdx: number; round: Round; at: number }
+  | ({ type: 'steal'; spotIdx: number } & EventBase)
   /** valueは持ち出した商品の合計金額（円）。この値がチームスコアに加算される */
-  | { type: 'escape'; by: string; value: number; round: Round; at: number }
-  | { type: 'miss'; by: string; npcIdx: number; round: Round; at: number }
-  | { type: 'caught'; by: string; mouseId: string; round: Round; at: number };
+  | ({ type: 'escape'; value: number } & EventBase)
+  | ({ type: 'miss'; npcIdx: number } & EventBase)
+  | ({ type: 'caught'; mouseId: string } & EventBase);

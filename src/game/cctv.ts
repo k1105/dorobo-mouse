@@ -133,6 +133,12 @@ export class CctvView {
     }
   }
 
+  /** モニタ枠の表示/非表示（ステージ紹介中は全画面の映像に切り替えるため隠す） */
+  setVisible(visible: boolean): void {
+    this.overlay.classList.toggle('hidden', !visible);
+    this.layoutDirty = true;
+  }
+
   /** HUDバーやマップの高さが変わったとき（マップの表示切替など）に次フレームでレイアウトし直す */
   relayout(): void {
     this.layoutDirty = true;

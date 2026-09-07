@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { CONFIG, COLORS } from '../config';
+import { AVATAR_PALETTE, CONFIG, COLORS } from '../config';
 import type { NetAdapter } from '../net';
-import type { GameEvent, PhaseState, PlayerInfo, PosMsg, Role, Round, Team } from '../types';
-import { isMouseInRound, teamOf } from '../types';
+import type { GameEvent, PhaseState, PlayerInfo, PosMsg, Role, Round, SetResult, Team } from '../types';
+import { isMouseInRound, miceTeamOf, setsWon, teamOf } from '../types';
+import { mulberry32 } from './rng';
 import { Controls } from './controls';
 import { CctvView } from './cctv';
 import { CamMapView, MiniMapView } from '../ui/map';
@@ -10,7 +11,9 @@ import { createNpcSims, NpcSim } from './npc';
 import {
   buildWorld,
   CAPSULE_Y,
+  LABEL_LAYER,
   makeCapsule,
+  makeNameLabel,
   UPPER_LAYER,
   UPPER_LAYER_MIN_Y,
   type MoverPos,
@@ -22,6 +25,14 @@ import { getStage, type StageDef } from './stages';
 /** カメラマップの画面下端からの余白（style.css の .cam-map の bottom と合わせる） */
 const CAM_MAP_BOTTOM_PX = 10;
 import { Hud } from '../ui/hud';
+
+/** ステージ紹介のカメラカット（from→to へスイープしながら lookFrom→lookTo を注視する） */
+interface IntroShot {
+  from: THREE.Vector3;
+  to: THREE.Vector3;
+  lookFrom: THREE.Vector3;
+  lookTo: THREE.Vector3;
+}
 
 interface RemoteAvatar {
   mesh: THREE.Mesh;
@@ -43,6 +54,14 @@ interface RemoteAvatar {
  */
 export class Game {
   readonly round: Round;
+  /** 現在のセット（1始まり）と総セット数。スコアは同じセットのイベントだけを集計する */
+  readonly set: number;
+  private sets: number;
+  /**
+   * 練習モード（攻守交代の着せ替え時間に、後半で猫になる陣営が無人の店内でカメラ操作を試す）。
+   * NPC・プレイヤーは出さず、位置・イベントの送受信もしない。着せ替え時間が終わると main.ts が作り直す
+   */
+  readonly practice: boolean;
   private net: NetAdapter;
   private room: string;
   private myRole: Role;
@@ -75,6 +94,14 @@ export class Game {
   private npcSims: NpcSim[];
   private npcMeshes: THREE.Mesh[] = [];
   private npcFlashUntil: number[] = [];
+  /** NPCごとの色（パレットからseedで配色。プレイヤーの着せ替えと同じパレットなので紛れられる） */
+  private npcColors: number[] = [];
+  /** 前半開始前のステージ紹介（3カット）。後半は攻守交代のみなので無し */
+  private introShots: IntroShot[] = [];
+  private introCam = new THREE.PerspectiveCamera(60, 1, 0.1, 300);
+  private introActive = false;
+  /** リザルト表示中（操作UI・マップ・モニタ枠は隠したまま） */
+  private showingResult = false;
 
   private stealCount = 0;
   private myCarrying = 0;
@@ -86,21 +113,21 @@ export class Game {
   /** 盗み中のスポットと開始時刻（ゲーム内時間）。nullなら盗んでいない */
   private stealSpot: Spot | null = null;
   private stealStart: number | null = null;
-  /** 万引き成功（出口通過）後のリスポーン予定時刻（ゲーム内時間）。nullなら通常状態 */
-  private respawnAt: number | null = null;
   /**
-   * ダウトされた直後は演出のためこの時刻までその場に（緑色で）見えたまま固まり、
-   * その後退場する。nullなら通常状態
+   * ダウトされたネズミが退場する時刻（ゲーム内時間）。ダウトされた直後は演出のためこの時刻まで
+   * その場に（緑色で）見えたまま固まり、その後退場する。nullなら通常状態
    */
-  private caughtVisibleUntil: number | null = null;
-  /** ダウトされたネズミが退場する時刻（ゲーム内時間）。nullなら通常状態 */
   private eliminateAt: number | null = null;
-  /** ダウトされて退場済み（自分のアバターは消え、俯瞰で観戦中） */
+  /** 退場済み（ダウトされた or 商品を持って店外へ脱出した）。自分のアバターは消え、俯瞰で観戦中 */
   private eliminated = false;
+  /** 商品を持って店外へ脱出して退場した（eliminated の内訳。HUD表示用） */
+  private escaped = false;
   /** このラウンドでダウトされた（退場した）ネズミプレイヤーのID */
   private caughtMice = new Set<string>();
-  /** 泥棒全員がダウトされたときに、ダウト演出を見せてからラウンドを即終了する時刻（ゲーム内時間） */
-  private allCaughtAt: number | null = null;
+  /** このラウンドで商品を持って店外へ脱出した（退場した）ネズミプレイヤーのID */
+  private escapedMice = new Set<string>();
+  /** 泥棒全員が退場（ダウト or 脱出）したときに、演出を見せてからラウンドを即終了する時刻（ゲーム内時間） */
+  private allOutAt: number | null = null;
   /** 一人称（泥棒目線）カメラモード。ネズミ役のデフォルトで、HUDのボタンで追従カメラとトグル */
   private fpsMode = true;
   private phase: PhaseState;
@@ -125,16 +152,26 @@ export class Game {
     this.room = room;
     this.phase = phase;
     this.round = phase.round ?? 1;
+    this.set = phase.set ?? 1;
+    this.sets = phase.sets ?? 1;
+    this.practice = phase.phase === 'costume';
     this.myRole = players[net.clientId]?.role ?? 'none';
     this.myTeam = teamOf(this.myRole);
-    this.amMouse = this.myRole !== 'none' && isMouseInRound(this.myRole, this.round);
+    this.amMouse = !this.practice && this.myRole !== 'none' && isMouseInRound(this.myRole, this.round);
     this.amCat = this.myTeam !== null && !this.amMouse;
     this.startAt = phase.startAt ?? Date.now();
     this.seed = phase.seed ?? 1;
     this.stage = getStage(phase.stage);
-    // ダウトのレイキャストと追従カメラは上階のレイヤも対象にする（追従カメラは状況に応じて外す）
+    // ダウトのレイキャストと追従カメラは上階のレイヤも対象にする（追従カメラは状況に応じて外す）。
+    // 名前ラベルは泥棒チームのクライアントだけが見える（猫・観戦には映さない）
     this.raycaster.layers.enableAll();
     this.followCam.layers.enableAll();
+    if (this.myTeam !== miceTeamOf(this.round)) this.followCam.layers.disable(LABEL_LAYER);
+    this.introCam.layers.enable(UPPER_LAYER);
+    if (this.round === 1 && !this.practice) {
+      this.introShots = this.buildIntroShots();
+      this.introActive = true;
+    }
 
     // レンダラ
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -146,17 +183,23 @@ export class Game {
 
     // ワールドとNPC
     this.world = buildWorld(this.scene, this.seed, this.stage);
-    this.npcSims = createNpcSims(this.seed, this.stage.npcCount, this.world.nav);
-    for (let i = 0; i < this.stage.npcCount; i++) {
-      const mesh = makeCapsule();
+    // 練習モードは無人（NPC・他プレイヤー無し）
+    const npcCount = this.practice ? 0 : this.stage.npcCount;
+    this.npcSims = createNpcSims(this.seed, npcCount, this.world.nav);
+    const colorRng = mulberry32(this.seed ^ 0xc01035);
+    for (let i = 0; i < npcCount; i++) {
+      const color = AVATAR_PALETTE[Math.floor(colorRng() * AVATAR_PALETTE.length)].hex;
+      const mesh = makeCapsule(color);
       this.scene.add(mesh);
       this.npcMeshes.push(mesh);
+      this.npcColors.push(color);
       this.npcFlashUntil.push(0);
     }
 
     // 自分のアバター（このラウンドでネズミの場合のみ。猫はカメラ越しに見るだけで店内にいない）
     if (this.amMouse) {
-      this.myMesh = makeCapsule(this.playerColor());
+      this.myMesh = makeCapsule(this.colorOf(net.clientId));
+      this.myMesh.add(makeNameLabel(players[net.clientId]?.name ?? ''));
       const spawn = this.spawnPos();
       this.base = { x: spawn.x, z: spawn.z, floor: 0 };
       this.myMesh.position.x = spawn.x;
@@ -179,9 +222,10 @@ export class Game {
 
     // 他プレイヤーのアバター（このラウンドでネズミのプレイヤーのみ店内に存在する）
     for (const [pid, info] of Object.entries(players)) {
-      if (pid === net.clientId) continue;
+      if (this.practice || pid === net.clientId) continue;
       if (info.role === 'none' || !isMouseInRound(info.role, this.round)) continue;
-      const mesh = makeCapsule(this.playerColor());
+      const mesh = makeCapsule(this.colorOf(pid));
+      mesh.add(makeNameLabel(info.name));
       mesh.visible = false; // 最初の位置情報が来るまで隠す
       this.scene.add(mesh);
       this.remotes.set(pid, { mesh, target: null, sx: 0, sz: 0, sy: 0, caughtUntil: 0 });
@@ -199,9 +243,17 @@ export class Game {
       // 自分の位置が分かるように、猫側と同じマップを左下に常時表示する
       this.miniMap = new MiniMapView(container, this.world.mapData);
     }
-    if (phase.note) this.hud.banner(phase.note, 'info');
-    if (this.round === 1) this.hud.banner(`ステージ: ${this.stage.name}`, 'info');
-    if (this.round === 2 && this.myTeam) {
+    if (this.practice) {
+      this.hud.banner(
+        `${this.round === 1 ? '前半' : '攻守交代！ 後半'}はあなたが 🎥 カメラ監視。相手の着せ替え時間のあいだ、無人の店内でカメラ操作を練習できます`,
+        'info',
+      );
+    }
+    if (phase.note && !this.practice) this.hud.banner(phase.note, 'info');
+    if (this.round === 1) {
+      this.hud.banner(`${this.sets > 1 ? `第${this.set}セット / ` : ''}ステージ: ${this.stage.name}`, 'info');
+    }
+    if (this.round === 2 && this.myTeam && !this.practice) {
       this.hud.banner(`後半戦: あなたは${this.amMouse ? '🐭 ネズミ' : '🎥 カメラ監視'}です`, 'info');
     }
 
@@ -233,6 +285,15 @@ export class Game {
       };
       syncCams();
       this.net.onDisconnectRemove(`rooms/${this.room}/cams/${this.net.clientId}`);
+      // ステージ紹介中はモニタ・マップを隠して全画面の映像を見せる
+      if (this.introActive) {
+        cctv.setVisible(false);
+        camMap.setVisible(false);
+      }
+    }
+    if (this.introActive) {
+      this.hud.setIntroMode(true);
+      this.miniMap?.setVisible(false);
     }
 
     this.controls.onKey = (code) => this.onKey(code);
@@ -250,13 +311,85 @@ export class Game {
 
   // ---- 初期化ヘルパ ----
 
+  /** プレイヤーのカプセル色（着せ替えで選んだ色。未設定ならフォールバック） */
+  private colorOf(pid: string): number {
+    return this.players[pid]?.color ?? COLORS.mouse;
+  }
+
   /**
-   * 泥棒プレイヤー（自分・仲間）のカプセル色。
-   * ネズミ役のクライアント（泥棒目線）では仲間が分かるように赤、
-   * 監視カメラ（猫）や観戦ではNPCと同じ青（見分けがつかないのがゲームの前提）
+   * ステージ紹介の3カット。1: 高い位置から店全体を横切る俯瞰、2: 通路の高さで手前から出口へドリー、
+   * 3: 複数フロアならスロープを見上げながら2Fへ、1フロアなら出口ゲート前を横切る
    */
-  private playerColor(): number {
-    return this.amMouse ? COLORS.thief : COLORS.mouse;
+  private buildIntroShots(): IntroShot[] {
+    const v = (x: number, y: number, z: number) => new THREE.Vector3(x, y, z);
+    const f0 = this.stage.floors[0];
+    const r = f0.rect;
+    const cx = (r.minX + r.maxX) / 2;
+    const cz = (r.minZ + r.maxZ) / 2;
+    const w = r.maxX - r.minX;
+    const d = r.maxZ - r.minZ;
+    const topY = this.stage.floors[this.stage.floors.length - 1].y;
+    const exitX = f0.exit?.x ?? cx;
+    const shots: IntroShot[] = [];
+    const h1 = Math.max(w, d) * 0.55 + topY;
+    shots.push({
+      from: v(cx - w * 0.45, h1, cz + d * 0.95),
+      to: v(cx + w * 0.45, h1, cz + d * 0.95),
+      lookFrom: v(cx, 0, cz),
+      lookTo: v(cx, 0, cz),
+    });
+    shots.push({
+      from: v(cx, 2.2, cz + d * 0.42),
+      to: v(exitX, 2.2, cz - d * 0.2),
+      lookFrom: v(cx, 1.0, cz - d * 0.1),
+      lookTo: v(exitX, 1.0, r.minZ),
+    });
+    const ramp = this.stage.ramps[0];
+    if (ramp) {
+      const rx = (ramp.rect.minX + ramp.rect.maxX) / 2;
+      const rz = (ramp.rect.minZ + ramp.rect.maxZ) / 2;
+      const y0 = this.stage.floors[ramp.from].y;
+      const y1 = this.stage.floors[ramp.to].y;
+      const dir = v(cx - rx, 0, cz - rz).normalize();
+      shots.push({
+        from: v(rx + dir.x * 11, y0 + 2.5, rz + dir.z * 11),
+        to: v(rx + dir.x * 7, y1 + 5, rz + dir.z * 7),
+        lookFrom: v(rx, y0 + 1, rz),
+        lookTo: v(rx, y1 + 0.5, rz),
+      });
+    } else {
+      shots.push({
+        from: v(r.minX + w * 0.2, 5, r.minZ + d * 0.45),
+        to: v(r.maxX - w * 0.2, 5, r.minZ + d * 0.45),
+        lookFrom: v(exitX, 0.5, r.minZ),
+        lookTo: v(exitX, 0.5, r.minZ),
+      });
+    }
+    return shots;
+  }
+
+  /** ステージ紹介の進行度 u（0..1）に応じてカメラを動かす */
+  private updateIntroCam(u: number): void {
+    const n = this.introShots.length;
+    const cut = Math.min(n - 1, Math.floor(u * n));
+    const k = Math.min(1, Math.max(0, u * n - cut));
+    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2; // ease in-out
+    const shot = this.introShots[cut];
+    this.introCam.position.lerpVectors(shot.from, shot.to, e);
+    const look = new THREE.Vector3().lerpVectors(shot.lookFrom, shot.lookTo, e);
+    this.introCam.lookAt(look);
+  }
+
+  /** ステージ紹介が終わったら通常表示（猫はモニタ・マップ）に戻す */
+  private endIntro(): void {
+    if (!this.introActive) return;
+    this.introActive = false;
+    if (this.showingResult) return; // リザルトが先に出ていたらUIは隠したまま
+    this.hud.setIntroMode(false);
+    this.miniMap?.setVisible(true);
+    this.cctv?.setVisible(true);
+    this.camMap?.setVisible(true);
+    this.cctv?.relayout();
   }
 
   /** このラウンドで店内にいるネズミプレイヤーの人数 */
@@ -267,6 +400,7 @@ export class Game {
   }
 
   private roleLabel(): string {
+    if (this.practice) return `チーム${this.myTeam}・🎥 カメラ練習`;
     if (!this.myTeam) return '観戦';
     return `チーム${this.myTeam}・${this.amMouse ? '🐭 ネズミ' : '🎥 カメラ監視'}`;
   }
@@ -310,10 +444,10 @@ export class Game {
           r.sy = this.world.heightAt(pos.x, pos.z, pos.f ?? 0);
           r.mesh.position.set(pos.x, CAPSULE_Y + r.sy, pos.z);
         }
-        // リスポーン待ち中のプレイヤーは非表示（ダウトの対象にもならない）。
-        // ダウトで緑色にした後、姿を消したタイミングで元の色に戻す（復帰時は普通のネズミに見える）
+        // 退場済み（ダウト・脱出）のプレイヤーは非表示（ダウトの対象にもならない）。
+        // ダウトで緑色にした後、姿を消したタイミングで元の色に戻す
         r.mesh.visible = !pos.hidden;
-        if (pos.hidden) (r.mesh.material as THREE.MeshStandardMaterial).color.setHex(this.playerColor());
+        if (pos.hidden) (r.mesh.material as THREE.MeshStandardMaterial).color.setHex(this.colorOf(pid));
         r.target = pos;
       }
     }
@@ -332,6 +466,8 @@ export class Game {
   }
 
   private applyEvent(ev: GameEvent, silent: boolean): void {
+    // 別のセットのイベントは無視する（イベントは試合を通して残る）
+    if ((ev.set ?? 1) !== this.set) return;
     switch (ev.type) {
       case 'steal': {
         if (ev.round !== this.round) break;
@@ -355,10 +491,18 @@ export class Game {
         const team = teamOf(this.players[ev.by]?.role ?? 'none');
         if (team === 'A') this.scoreA += ev.value;
         else if (team === 'B') this.scoreB += ev.value;
+        // チキンレース方式: 店外へ出たネズミはそのラウンドには戻れない（退場して観戦）
+        if (ev.round === this.round) {
+          this.escapedMice.add(ev.by);
+          this.checkAllOut(silent);
+        }
         // リロード時のイベント再生でも所持数・所持金額が正しく復元されるようにする
         if (ev.by === this.net.clientId && ev.round === this.round) {
           this.myCarrying = 0;
           this.myCarryingValue = 0;
+          // 通常は出口判定の時点で退場済み。リロード時のイベント再生では演出なしでここで退場する
+          this.escaped = true;
+          this.eliminate();
         }
         if (!silent && team) {
           this.hud.banner(
@@ -392,10 +536,7 @@ export class Game {
         // ダウトは成功しても回数を消費する
         if (ev.by === this.net.clientId) this.myDoubtsUsed++;
         this.caughtMice.add(ev.mouseId);
-        // 泥棒全員が見破られたら、ダウト演出が終わった時点でラウンドを即終了する（後半なら試合終了）
-        if (this.allCaughtAt === null && this.miceCount() > 0 && this.caughtMice.size >= this.miceCount()) {
-          this.allCaughtAt = silent ? this.gameTime() : this.gameTime() + CONFIG.doubtEffectSec;
-        }
+        this.checkAllOut(silent);
         const isMe = ev.mouseId === this.net.clientId;
         // 見破られたネズミは所持中の商品を失う（リロード時のイベント再生でも復元されるよう silent でも実行）
         if (isMe) {
@@ -422,14 +563,13 @@ export class Game {
           (mesh.material as THREE.MeshStandardMaterial).color.setHex(COLORS.caught);
         }
         if (remote) {
-          remote.caughtUntil =
-            performance.now() + (CONFIG.doubtEffectSec + CONFIG.respawnDelaySec) * 1000;
+          // 当人が演出後に退場して hidden の位置情報を送ってくるまで、二重ダウトの対象から外す（余裕を持って+3秒）
+          remote.caughtUntil = performance.now() + (CONFIG.doubtEffectSec + 3) * 1000;
         }
         if (isMe && this.myMesh) {
           // 演出の間はその場で固まって見えたまま → その後退場（俯瞰の観戦に切り替わる）
           const t = this.gameTime();
-          this.caughtVisibleUntil = t + CONFIG.doubtEffectSec;
-          this.eliminateAt = this.caughtVisibleUntil;
+          this.eliminateAt = t + CONFIG.doubtEffectSec;
           this.cancelSteal();
         }
         break;
@@ -438,15 +578,25 @@ export class Game {
   }
 
   /**
-   * ダウトされたネズミの退場処理。自分のアバターを店内から消し（他クライアントには hidden を送る）、
+   * 泥棒全員が退場（ダウト or 脱出）していたら、演出が終わった時点でラウンドを即終了する予約を入れる
+   * （後半なら試合終了）
+   */
+  private checkAllOut(silent: boolean): void {
+    if (this.allOutAt !== null || this.miceCount() <= 0) return;
+    const out = new Set([...this.caughtMice, ...this.escapedMice]);
+    if (out.size < this.miceCount()) return;
+    this.allOutAt = silent ? this.gameTime() : this.gameTime() + CONFIG.doubtEffectSec;
+  }
+
+  /**
+   * ネズミの退場処理（ダウトされた／商品を持って店外へ脱出した）。
+   * 自分のアバターを店内から消し（他クライアントには hidden を送る）、
    * ネズミ用のUIを片付けて、ゲーム途中参加の観戦者と同じ神様目線（店内全体の俯瞰）に切り替える。
    */
   private eliminate(): void {
     if (!this.myMesh || this.eliminated) return;
     this.eliminated = true;
     this.eliminateAt = null;
-    this.caughtVisibleUntil = null;
-    this.respawnAt = null;
     this.cancelSteal();
     // 最後の位置情報として hidden を送り、他クライアントから姿を消す（以降は送信しない）
     this.net.set(`rooms/${this.room}/pos/${this.net.clientId}`, {
@@ -461,8 +611,7 @@ export class Game {
     for (const mesh of [this.myMesh, this.selfRing]) {
       if (!mesh) continue;
       this.scene.remove(mesh);
-      mesh.geometry.dispose();
-      (mesh.material as THREE.Material).dispose();
+      mesh.traverse(disposeObject);
     }
     this.myMesh = null;
     this.selfRing = null;
@@ -473,7 +622,7 @@ export class Game {
     this.followCam.fov = CONFIG.followFov;
     this.followCam.updateProjectionMatrix();
     this.hud.hideMouseControls();
-    this.hud.setRole(`チーム${this.myTeam}・👻 退場（観戦）`);
+    this.hud.setRole(`チーム${this.myTeam}・${this.escaped ? '🏃 脱出成功（観戦）' : '👻 退場（観戦）'}`);
   }
 
   /** 観戦（退場後・役割なし）の俯瞰で表示するフロアの説明 */
@@ -518,20 +667,49 @@ export class Game {
     const phase = val as PhaseState | null;
     if (!phase) return;
     this.phase = phase;
-    if (phase.phase === 'ended' && phase.winner) {
-      this.hud.showEnd(
-        phase.winner,
-        phase.reason ?? '',
-        phase.scoreA ?? this.scoreA,
-        phase.scoreB ?? this.scoreB,
-        () => {
-          // 誰でもロビーに戻せる（プロトタイプ）
-          this.net.remove(`rooms/${this.room}/events`);
-          this.net.remove(`rooms/${this.room}/pos`);
-          this.net.remove(`rooms/${this.room}/cams`);
-          this.net.set(`rooms/${this.room}/phase`, { phase: 'lobby' } satisfies PhaseState);
-        },
-      );
+    if ((phase.phase === 'ended' || phase.phase === 'setEnd') && phase.winner) {
+      // リザルト演出の邪魔になる操作UI・マップ・モニタ枠を隠す
+      this.showingResult = true;
+      this.hud.setIntroMode(true);
+      this.miniMap?.setVisible(false);
+      this.cctv?.setVisible(false);
+      this.camMap?.setVisible(false);
+      const results = phase.results ?? [];
+      const tally = setsWon(results);
+      if (phase.phase === 'setEnd') {
+        // セット終了: このセットのスコアと、ここまでのセット数。次のセットへは main.ts が until で進める
+        const nextStage = getStage(phase.stages?.[(phase.set ?? 1)] ?? phase.stage);
+        this.hud.showEnd({
+          heading: `第${phase.set ?? 1}セット終了`,
+          winner: phase.winner,
+          scoreA: phase.scoreA ?? this.scoreA,
+          scoreB: phase.scoreB ?? this.scoreB,
+          reason: phase.reason ?? '',
+          tally,
+          totalSets: phase.sets ?? 1,
+          next: `次は第${(phase.set ?? 1) + 1}セット（ステージ: ${nextStage.name}）。まもなく準備時間に入ります`,
+        });
+      } else {
+        // 試合終了: 最終成績（セット数）と各セットのスコア
+        this.hud.showEnd({
+          heading: '試合終了',
+          winner: phase.winner,
+          scoreA: phase.scoreA ?? this.scoreA,
+          scoreB: phase.scoreB ?? this.scoreB,
+          reason: phase.reason ?? '',
+          tally,
+          totalSets: phase.sets ?? 1,
+          results,
+          final: true,
+          onLobby: () => {
+            // 誰でもロビーに戻せる（プロトタイプ）
+            this.net.remove(`rooms/${this.room}/events`);
+            this.net.remove(`rooms/${this.room}/pos`);
+            this.net.remove(`rooms/${this.room}/cams`);
+            this.net.set(`rooms/${this.room}/phase`, { phase: 'lobby' } satisfies PhaseState);
+          },
+        });
+      }
     }
   }
 
@@ -543,27 +721,60 @@ export class Game {
     if (this.endSent) return;
     if (this.phase.phase !== 'playing' || (this.phase.round ?? 1) !== this.round) return;
     this.endSent = true;
+    // セット構成は phase から持ち回る（Firebase は undefined を拒否するので未定義は入れない）
+    const carry: PhaseState = { phase: 'playing', set: this.set, sets: this.sets, stage: this.stage.id };
+    if (this.phase.stages) carry.stages = this.phase.stages;
+    if (this.phase.results) carry.results = this.phase.results;
     if (this.round === 1) {
+      // 攻守交代: 後半の前に着せ替え・作戦会議の時間を挟む（後半の開始は main.ts が until で書く）
       this.net.remove(`rooms/${this.room}/pos`);
       this.net.set(`rooms/${this.room}/phase`, {
-        phase: 'playing',
+        ...carry,
+        phase: 'costume',
         round: 2,
-        startAt: Date.now() + CONFIG.countdownSec * 1000,
-        seed: Math.floor(Math.random() * 2 ** 31),
-        stage: this.stage.id,
+        until: Date.now() + CONFIG.costumeSec * 1000,
         note: `${reasonText} — 攻守交代！`,
       } satisfies PhaseState);
-    } else {
-      const winner = this.scoreA > this.scoreB ? 'A' : this.scoreB > this.scoreA ? 'B' : 'draw';
+      return;
+    }
+    // セット終了。結果を積み、最終セットなら試合終了（獲得セット数で勝敗。同数なら合計金額、それも同じなら引き分け）
+    const result: SetResult = { scoreA: this.scoreA, scoreB: this.scoreB };
+    const results = [...(this.phase.results ?? []), result];
+    const setWinner = this.scoreA > this.scoreB ? 'A' : this.scoreB > this.scoreA ? 'B' : 'draw';
+    if (this.set < this.sets) {
       this.net.set(`rooms/${this.room}/phase`, {
-        ...this.phase,
-        phase: 'ended',
-        winner,
-        reason: reasonText,
+        ...carry,
+        phase: 'setEnd',
+        round: 2,
+        results,
+        until: Date.now() + CONFIG.setEndSec * 1000,
+        winner: setWinner,
+        reason: reasonText.replace('試合終了', '後半終了'),
         scoreA: this.scoreA,
         scoreB: this.scoreB,
       } satisfies PhaseState);
+      return;
     }
+    const tally = setsWon(results);
+    const totalA = results.reduce((n, r) => n + r.scoreA, 0);
+    const totalB = results.reduce((n, r) => n + r.scoreB, 0);
+    const winner =
+      tally.a > tally.b ? 'A' : tally.b > tally.a ? 'B' : totalA > totalB ? 'A' : totalB > totalA ? 'B' : 'draw';
+    this.net.set(`rooms/${this.room}/phase`, {
+      ...carry,
+      phase: 'ended',
+      round: 2,
+      results,
+      winner,
+      reason:
+        this.sets > 1
+          ? tally.a === tally.b
+            ? `セット数 ${tally.a} - ${tally.b}。合計金額で決着`
+            : `セット数 ${tally.a} - ${tally.b}`
+          : reasonText,
+      scoreA: totalA,
+      scoreB: totalB,
+    } satisfies PhaseState);
   }
 
   // ---- 盗み ----
@@ -571,7 +782,7 @@ export class Game {
   /** 盗むボタンを押した: 一番近い商品棚スポットが判定半径内にあれば盗みを開始する（離すと cancelSteal） */
   private tryStartSteal(): void {
     if (!this.amMouse || !this.myMesh || this.stealStart !== null) return;
-    if (this.respawnAt !== null || this.eliminateAt !== null) return;
+    if (this.eliminateAt !== null) return;
     if (this.phase.phase !== 'playing' || (this.phase.round ?? 1) !== this.round) return;
     const t = this.gameTime();
     if (t < 0) return;
@@ -647,13 +858,15 @@ export class Game {
     for (const r of this.remotes.values()) {
       if (r.mesh.visible && now >= r.caughtUntil) targets.push(r.mesh);
     }
-    const hits = this.raycaster.intersectObjects(targets, false);
+    // 鼻や耳などのパーツをクリックしても当たるように子も含めて判定し、本体（targets の要素）に戻す
+    const hits = this.raycaster.intersectObjects(targets, true);
     if (hits.length === 0) return;
     if (this.doubtsLeft() <= 0) {
       this.hud.banner('ダウトの残り回数がありません', 'alert');
       return;
     }
-    const obj = hits[0].object;
+    let obj: THREE.Object3D = hits[0].object;
+    while (obj.parent && !targets.includes(obj)) obj = obj.parent;
     for (const [pid, r] of this.remotes) {
       if (r.mesh === obj) {
         this.net.push(`rooms/${this.room}/events`, {
@@ -661,6 +874,7 @@ export class Game {
           by: this.net.clientId,
           mouseId: pid,
           round: this.round,
+          set: this.set,
           at: Date.now(),
         } satisfies GameEvent);
         // ラウンドは終わらない。見破られたネズミ側が caught イベントを受けて退場する
@@ -674,6 +888,7 @@ export class Game {
         by: this.net.clientId,
         npcIdx,
         round: this.round,
+        set: this.set,
         at: Date.now(),
       } satisfies GameEvent);
     }
@@ -695,32 +910,23 @@ export class Game {
     const playing =
       this.phase.phase === 'playing' && (this.phase.round ?? 1) === this.round && t >= 0;
 
-    // 万引き成功後のリスポーン（待ち時間が明けたら死角に出現）
-    if (this.myMesh && playing && this.respawnAt !== null && t >= this.respawnAt) {
-      this.respawnAt = null;
-      this.caughtVisibleUntil = null;
-      this.base = { ...this.world.blindSpawn };
-      // ダウトで緑色になっていた場合は元の色に戻す
-      (this.myMesh.material as THREE.MeshStandardMaterial).color.setHex(this.playerColor());
-    }
     // ダウト演出中に見えたまま固まる時間。過ぎたら退場（アバターが消えて俯瞰の観戦に切り替わる）
     if (this.myMesh && this.eliminateAt !== null && t >= this.eliminateAt) {
       this.eliminate();
     }
-    const caughtVisible =
-      this.caughtVisibleUntil !== null && t < this.caughtVisibleUntil;
-
-    // 開始前カウントダウン／リスポーン待ちの残り秒数
-    if (this.phase.phase === 'playing' && t < 0) {
+    // 開始前: ステージ紹介（前半のみ）→ 3/2/1 カウントダウン
+    const inIntro = this.introActive && t < -CONFIG.countdownSec;
+    if (this.introActive && !inIntro) this.endIntro();
+    if (inIntro) {
+      this.hud.setCenter('');
+    } else if (this.phase.phase === 'playing' && t < 0) {
       this.hud.setCenter(String(Math.ceil(-t)));
-    } else if (playing && this.respawnAt !== null && !caughtVisible) {
-      this.hud.setCenter(`復帰まで ${Math.ceil(this.respawnAt - t)}秒`, true);
     } else {
       this.hud.setCenter('');
     }
 
-    // 自分の移動（実位置=base。表示位置は揺れモーションを足す）。リスポーン待ち・ダウト演出中は動けない
-    if (this.myMesh && playing && this.respawnAt === null && this.eliminateAt === null) {
+    // 自分の移動（実位置=base。表示位置は揺れモーションを足す）。ダウト演出中は動けない
+    if (this.myMesh && playing && this.eliminateAt === null) {
       if (this.fpsMode) {
         // 一人称: A/D・左右で向きを回し、W/S・上下で向いている方向へ前進/後退
         const inp = this.controls.fpsInput();
@@ -764,14 +970,14 @@ export class Game {
           f: this.base.floor,
           ry: this.myMesh.rotation.y,
           t: Date.now(),
-          hidden: this.respawnAt !== null && !caughtVisible,
+          hidden: false,
           sway: swaying,
         } satisfies PosMsg);
       }
     }
     if (this.myMesh) {
-      // リスポーン待ち中は非表示（ダウト演出中は見えたまま）。一人称モード中も自分のカプセルが視界を塞ぐので隠す
-      const visible = (this.respawnAt === null || caughtVisible) && !this.fpsMode;
+      // 一人称モード中は自分のカプセルが視界を塞ぐので隠す
+      const visible = !this.fpsMode;
       this.myMesh.visible = visible;
       if (this.selfRing) {
         this.selfRing.visible = visible;
@@ -783,7 +989,7 @@ export class Game {
         this.base.x,
         this.base.z,
         this.myMesh.rotation.y,
-        this.respawnAt !== null && !caughtVisible,
+        false,
         this.base.floor,
       );
     }
@@ -800,7 +1006,7 @@ export class Game {
         this.assignLayer(mesh, y);
         const mat = mesh.material as THREE.MeshStandardMaterial;
         const flashing = now < this.npcFlashUntil[i];
-        mat.color.setHex(flashing ? 0xff3333 : COLORS.mouse);
+        mat.color.setHex(flashing ? 0xff3333 : this.npcColors[i]);
       }
     }
 
@@ -849,14 +1055,16 @@ export class Game {
               by: this.net.clientId,
               spotIdx,
               round: this.round,
+              set: this.set,
               at: Date.now(),
             } satisfies GameEvent);
           }
         }
       }
-      // 出口判定: 商品を持って出口を通ると所持金額分のポイント → 一定時間姿を消してからカメラの死角にリスポーン
+      // 出口判定: 商品を持って出口を通ると所持金額分のポイント。
+      // チキンレース方式: 店外へ出たらそのラウンドには戻れず、退場して観戦になる
       if (
-        this.respawnAt === null &&
+        !this.eliminated &&
         this.myCarrying > 0 &&
         this.world.isInExitZone(this.base.x, this.base.z, this.base.floor)
       ) {
@@ -868,22 +1076,27 @@ export class Game {
           by: this.net.clientId,
           value,
           round: this.round,
+          set: this.set,
           at: Date.now(),
         } satisfies GameEvent);
-        this.respawnAt = t + CONFIG.respawnDelaySec;
-        this.cancelSteal();
+        this.escaped = true;
+        this.eliminate();
       }
     } else if (this.stealStart !== null) {
       // ラウンド終了・開始前カウントダウン中は盗みを中断する
       this.cancelSteal();
     }
 
-    // タイマー・スコア・補助情報
-    const remain = CONFIG.roundTimeSec - Math.max(0, t);
+    // タイマー・スコア・補助情報（練習モードは着せ替え時間の残りを出す）
+    const remain = this.practice
+      ? ((this.phase.until ?? Date.now()) - Date.now()) / 1000
+      : CONFIG.roundTimeSec - Math.max(0, t);
     this.hud.setTimer(remain);
-    this.hud.setScore(this.round, this.scoreA, this.scoreB);
-    if (this.amMouse && this.eliminated) {
-      this.hud.setInfo(`退場中（観戦） / チームの盗み: ${this.stealCount}${this.spectateInfo()}`);
+    this.hud.setScore(this.round, this.scoreA, this.scoreB, this.sets > 1 ? `第${this.set}/${this.sets}セット` : '');
+    if (this.practice) {
+      this.hud.setInfo(`無人の店内で練習中（${this.round === 1 ? '前半' : '後半'}開始まで）`);
+    } else if (this.amMouse && this.eliminated) {
+      this.hud.setInfo(`${this.escaped ? '脱出済み（観戦）' : '退場中（観戦）'} / チームの盗み: ${this.stealCount}${this.spectateInfo()}`);
     } else if (this.amMouse) {
       const floorLabel = this.multiFloor() ? `${this.stage.floors[this.base.floor].name} / ` : '';
       this.hud.setInfo(`${floorLabel}盗み: ${this.stealCount} / 所持: ${this.myCarrying}個 (${this.myCarryingValue}円)`);
@@ -897,20 +1110,28 @@ export class Game {
     if (playing && remain <= 0 && (this.isHost() || remain <= -2)) {
       this.advanceRound(this.round === 1 ? '前半終了！' : '試合終了！');
     }
-    // 泥棒全員ダウト → 時間を待たずにラウンド即終了（前半なら攻守交代、後半なら試合終了）
+    // 泥棒全員が退場（ダウト or 脱出）→ 時間を待たずにラウンド即終了（前半なら攻守交代、後半なら試合終了）
     if (
       playing &&
-      this.allCaughtAt !== null &&
-      t >= this.allCaughtAt &&
-      (this.isHost() || t >= this.allCaughtAt + 2)
+      this.allOutAt !== null &&
+      t >= this.allOutAt &&
+      (this.isHost() || t >= this.allOutAt + 2)
     ) {
-      this.advanceRound(
-        this.round === 1 ? '泥棒全員ダウト！前半終了！' : '泥棒全員ダウト！試合終了！',
-      );
+      const why =
+        this.escapedMice.size === 0
+          ? '泥棒全員ダウト！'
+          : this.caughtMice.size === 0
+            ? '泥棒全員脱出！'
+            : '泥棒全員退場！';
+      this.advanceRound(why + (this.round === 1 ? '前半終了！' : '試合終了！'));
     }
 
     // 描画
-    if (this.cctv) {
+    if (inIntro) {
+      const u = (t + CONFIG.countdownSec + CONFIG.introSec) / CONFIG.introSec;
+      this.updateIntroCam(Math.min(1, Math.max(0, u)));
+      this.renderer.render(this.scene, this.introCam);
+    } else if (this.cctv) {
       this.cctv.render(this.renderer, this.scene, this.world.cctvCams);
     } else {
       this.updateFollowCam();
@@ -929,7 +1150,12 @@ export class Game {
    */
   private assignLayer(mesh: THREE.Mesh, y: number): void {
     if (!this.multiFloor()) return;
-    mesh.layers.set(y >= UPPER_LAYER_MIN_Y ? UPPER_LAYER : 0);
+    const layer = y >= UPPER_LAYER_MIN_Y ? UPPER_LAYER : 0;
+    mesh.layers.set(layer);
+    // 鼻や耳などのパーツも本体と同じレイヤに入れる（名前ラベルは専用レイヤのまま）
+    for (const c of mesh.children) {
+      if (c instanceof THREE.Mesh) c.layers.set(layer);
+    }
   }
 
   /** 視点切替ボタン: 追従カメラ ⇔ 一人称（泥棒目線） */
@@ -980,6 +1206,8 @@ export class Game {
     this.renderer.setSize(w, h);
     this.followCam.aspect = w / h;
     this.followCam.updateProjectionMatrix();
+    this.introCam.aspect = w / h;
+    this.introCam.updateProjectionMatrix();
     this.cctv?.relayout();
   };
 
@@ -997,15 +1225,21 @@ export class Game {
     this.miniMap?.dispose();
     this.renderer.domElement.removeEventListener('click', this.onCanvasClick);
     window.removeEventListener('resize', this.onResize);
-    this.scene.traverse((obj) => {
-      if (obj instanceof THREE.Mesh) {
-        obj.geometry.dispose();
-        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
-        for (const m of mats) m.dispose();
-      }
-    });
+    this.scene.traverse(disposeObject);
     this.scene.clear();
     this.renderer.dispose();
     this.renderer.domElement.remove();
+  }
+}
+
+/** メッシュ・スプライトのGPU資源を解放する（scene.traverse / Object3D.traverse 用） */
+function disposeObject(obj: THREE.Object3D): void {
+  if (obj instanceof THREE.Mesh) {
+    obj.geometry.dispose();
+    const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+    for (const m of mats) m.dispose();
+  } else if (obj instanceof THREE.Sprite) {
+    obj.material.map?.dispose();
+    obj.material.dispose();
   }
 }
