@@ -1,6 +1,6 @@
 import type { NetAdapter } from '../net';
 import type { PhaseState, PlayerInfo, Role } from '../types';
-import { ROLE_LABELS } from '../types';
+import { isStalePhase, ROLE_LABELS } from '../types';
 import { CONFIG } from '../config';
 import { DEFAULT_STAGE_ID, getStage, STAGES, type StageId } from '../game/stages';
 
@@ -71,9 +71,16 @@ export class Lobby {
     this.net.onDisconnectRemove(`rooms/${room}/players/${pid}`);
     this.net.onDisconnectRemove(`rooms/${room}/pos/${pid}`);
 
+    let firstSnapshot = true;
     this.unsubs.push(
       this.net.subscribe(`rooms/${room}/players`, (val) => {
         this.players = (val ?? {}) as Record<string, PlayerInfo>;
+        if (firstSnapshot) {
+          firstSnapshot = false;
+          // 自分以外に誰もいない部屋は、前の試合の残骸（phase・events 等）が残っていても
+          // 誰も進行できないので、入室時にロビー状態へ戻す
+          if (!Object.keys(this.players).some((id) => id !== pid)) this.resetRoom();
+        }
         this.renderRoom();
         this.onUpdate?.(room, this.players, this.phase);
       }),
@@ -87,6 +94,14 @@ export class Lobby {
         this.renderRoom();
       }),
     );
+  }
+
+  /** 前の試合の残骸を消してロビー状態にする（開始時・誰もいない部屋への入室時） */
+  private resetRoom(): void {
+    this.net.remove(`rooms/${this.room}/events`);
+    this.net.remove(`rooms/${this.room}/pos`);
+    this.net.remove(`rooms/${this.room}/cams`);
+    this.net.set(`rooms/${this.room}/phase`, { phase: 'lobby' } satisfies PhaseState);
   }
 
   /** joinedAtが最小のプレイヤーがホスト（開始ボタンを持つ） */
@@ -108,7 +123,7 @@ export class Lobby {
     const me = this.players[pid];
     if (!me) return;
     const isHost = this.hostId() === pid;
-    const inGame = this.phase.phase === 'playing';
+    const inGame = this.phase.phase === 'playing' && !isStalePhase(this.phase);
 
     const slots = ROLES.map((role) => {
       const owner = Object.entries(this.players).find(([, p]) => p.role === role);

@@ -1,6 +1,7 @@
 import { createNet } from './net';
 import { Game } from './game/game';
 import { Lobby } from './ui/lobby';
+import { isStalePhase } from './types';
 
 async function boot(): Promise<void> {
   const app = document.getElementById('app')!;
@@ -11,7 +12,7 @@ async function boot(): Promise<void> {
   let game: Game | null = null;
 
   lobby.onUpdate = (room, players, phase) => {
-    if (phase.phase === 'playing') {
+    if (phase.phase === 'playing' && !isStalePhase(phase)) {
       // ラウンドが進んだら（前半→後半の攻守交代）ゲームを作り直す
       const round = phase.round ?? 1;
       if (game && game.round !== round) {
@@ -22,7 +23,7 @@ async function boot(): Promise<void> {
         lobby.hide();
         game = new Game(app, net, room, players, phase);
       }
-    } else if (phase.phase === 'lobby' && game) {
+    } else if ((phase.phase === 'lobby' || isStalePhase(phase)) && game) {
       game.dispose();
       game = null;
       lobby.show();

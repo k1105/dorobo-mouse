@@ -1,3 +1,5 @@
+import { CONFIG } from './config';
+
 export type Role = 'a1' | 'a2' | 'b1' | 'b2' | 'none';
 export type Team = 'A' | 'B';
 export type Round = 1 | 2;
@@ -45,6 +47,16 @@ export interface PhaseState {
   reason?: string;
   scoreA?: number;
   scoreB?: number;
+}
+
+/**
+ * 誰もいなくなった部屋に残った試合の残骸かどうか。
+ * 進行中の試合なら1ラウンドの時間内に必ず phase が書き換わる（startAt が更新される）ので、
+ * それより十分古い startAt の 'playing' は途中で全員が抜けた試合とみなしてロビー扱いにする
+ */
+export function isStalePhase(phase: PhaseState): boolean {
+  if (phase.phase !== 'playing' || !phase.startAt) return false;
+  return Date.now() - phase.startAt > (CONFIG.countdownSec + CONFIG.roundTimeSec + 30) * 1000;
 }
 
 export interface PosMsg {
