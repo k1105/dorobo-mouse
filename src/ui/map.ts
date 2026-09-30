@@ -9,6 +9,10 @@ const BASE_SCALE = 480 / 43.6;
 /** フロア同士の間隔（ワールド単位） */
 const FLOOR_GAP = 1.2;
 const RAYS_PER_CAM = 72;
+/** マップの高さの上限（表示幅に対する比）。縦長のステージ（エディタ製）でも画面を塞がないよう、超える場合は全体を縮める */
+const MAX_H_RATIO = 0.75;
+/** 文字・マーカーの拡大率の上限（BASE_SCALE 比）。組み込みで一番小さい「シンプル」の倍率（約1.47）は変えない */
+const MAX_MARK_SCALE = 1.5;
 
 /** 店内レイアウトと各カメラの視野を俯瞰で描く。猫のモーダルとネズミのミニマップで共有する */
 interface MapCanvas {
@@ -42,7 +46,7 @@ interface CamOnline {
 function drawMap(
   canvas: HTMLCanvasElement,
   data: MapData,
-  cssW: number,
+  maxW: number,
   online?: CamOnline,
 ): MapCanvas {
   const pad = 0.8;
@@ -57,7 +61,8 @@ function drawMap(
     worldW += f.rect.maxX - f.rect.minX + pad * 2;
     worldH = Math.max(worldH, f.rect.maxZ - f.rect.minZ + pad * 2);
   });
-  const scale = cssW / worldW;
+  const scale = Math.min(maxW / worldW, (maxW * MAX_H_RATIO) / worldH);
+  const cssW = Math.round(worldW * scale);
   const cssH = Math.round(worldH * scale);
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = cssW * dpr;
@@ -70,7 +75,8 @@ function drawMap(
     (offsets[floor] + pad + x - floors[floor].rect.minX) * scale;
   const tz = (z: number, floor: number) => (pad + z - floors[floor].rect.minZ) * scale;
   // 文字サイズは描画スケールに比例させる（ミニマップでは小さく）
-  const fs = (px: number) => Math.max(5, Math.round((px * scale) / BASE_SCALE));
+  // 小さいステージ（エディタ製）ほど拡大して描くので、文字・マーカーが大きくなりすぎないよう倍率に上限を設ける
+  const fs = (px: number) => Math.max(5, Math.round(px * Math.min(scale / BASE_SCALE, MAX_MARK_SCALE)));
 
   const isMine = (id: number) => !online || online.mine.has(id);
   const isOthers = (id: number) => !!online && online.others.has(id);

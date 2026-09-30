@@ -24,6 +24,10 @@ export interface ShelfDef {
   h: number;
   label: string;
   sides: Side[];
+  /** 料金帯（config.PRICE_TIERS のインデックス）。指定するとその帯の商品だけが割り当てられる。未指定は全商品からランダム */
+  tier?: number;
+  /** 盗みスポットの位置を直接指定する（ステージエディタ製）。未指定なら sides に沿って自動配置する */
+  spots?: { x: number; z: number }[];
 }
 
 /** 防犯カメラ。位置と注視点（死角設計はここを調整する） */
@@ -62,7 +66,8 @@ export interface RampDef {
 export type StageId = 'standard' | 'simple' | 'twofloor';
 
 export interface StageDef {
-  id: StageId;
+  /** 組み込みは StageId。ステージエディタ製は 'c_' で始まるID */
+  id: string;
   name: string;
   desc: string;
   floors: FloorDef[];
@@ -73,8 +78,8 @@ export interface StageDef {
 }
 
 const CASE_H = 2.0; // 壁面ケース
-const GONDOLA_H = 2.2; // 中央ゴンドラ
-const ISLAND_H = 1.0; // 平台（低いのでカメラの視線は通る）
+export const GONDOLA_H = 2.2; // 中央ゴンドラ
+export const ISLAND_H = 1.0; // 平台（低いのでカメラの視線は通る）
 
 // ---------------------------------------------------------------------------
 // スタンダード（従来のレイアウト）
@@ -295,7 +300,15 @@ export const STAGES: readonly StageDef[] = [STANDARD, SIMPLE, TWOFLOOR];
 
 export const DEFAULT_STAGE_ID: StageId = 'standard';
 
+/** ステージエディタ製のステージ。ルームの試合構成（match.custom）やテストプレイから登録される */
+const customStages = new Map<string, StageDef>();
+
+/** ステージエディタ製のステージを登録する（同じIDは上書き） */
+export function registerStage(def: StageDef): void {
+  customStages.set(def.id, def);
+}
+
 /** IDからステージ定義を返す。不明・未指定ならスタンダード */
 export function getStage(id: string | undefined | null): StageDef {
-  return STAGES.find((s) => s.id === id) ?? STAGES[0];
+  return STAGES.find((s) => s.id === id) ?? customStages.get(id ?? '') ?? STAGES[0];
 }

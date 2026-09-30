@@ -2,7 +2,8 @@ import type { NetAdapter } from '../net';
 import type { MatchConfig, PhaseState, PlayerInfo, Role, Team } from '../types';
 import { isMouseInRound, isStalePhase, rolesOfTeam, TEAM_LABELS, teamOf } from '../types';
 import { AVATAR_PALETTE, CONFIG } from '../config';
-import { DEFAULT_STAGE_ID, getStage, STAGES, type StageId } from '../game/stages';
+import { DEFAULT_STAGE_ID, getStage, STAGES } from '../game/stages';
+import { loadStages, registerCustomStage, validateStage, type CustomStageData } from '../game/customStage';
 import { CostumePreview, type CostumeMember } from './costume';
 import { TitleBackdrop } from './titlebg';
 
@@ -36,6 +37,8 @@ export class Lobby {
   /** 部屋の状態が変わるたびに呼ばれる（main.tsが画面遷移を判断） */
   onUpdate: ((room: string, players: Record<string, PlayerInfo>, phase: PhaseState) => void) | null =
     null;
+  /** タイトルの「ステージエディタ」が押されたときに呼ばれる（main.tsがエディタを開く） */
+  onOpenEditor: (() => void) | null = null;
   private unsubs: (() => void)[] = [];
   private roomIndex: RoomIndex = {};
   private unsubRoomIndex: (() => void) | null = null;
@@ -43,7 +46,14 @@ export class Lobby {
   private backdrop: TitleBackdrop | null = null;
   /** ルーム作成時に決める試合構成（入室後は変更しない） */
   private createSets = 1;
-  private createStages: StageId[] = [DEFAULT_STAGE_ID];
+  private createStages: string[] = [DEFAULT_STAGE_ID];
+  /** ルーム作成で選べる自作ステージ（このブラウザに保存されていて、遊べる状態のもの） */
+  private customStages: CustomStageData[] = [];
+  /**
+   * 試合構成（match）を受信済みか。自作ステージのデータは match に入っているので、
+   * 届く前にゲームを始めると別のステージで作られてしまう。届くまで onUpdate を呼ばない
+   */
+  private matchLoaded = false;
   private timerId = 0;
 
   constructor(parent: HTMLElement, net: NetAdapter) {
@@ -94,6 +104,7 @@ export class Lobby {
           <p class="title-kicker">猫が経営するスーパーで、群衆に紛れて万引きする 2 vs 2</p>
           <h1 class="title-logo">🐭 ドロボーマウス 🐱</h1>
           <button class="btn big" id="btn-title-start">スタート</button>
+          <button class="btn title-editor" id="btn-title-editor">🛠 ステージエディタ</button>
         </div>
         <span class="mode-badge title-mode">${this.modeLabel()}</span>
       </div>
@@ -101,6 +112,7 @@ export class Lobby {
     if (!this.backdrop) this.backdrop = new TitleBackdrop();
     this.root.querySelector('.scr-title')!.prepend(this.backdrop.el);
     this.root.querySelector<HTMLButtonElement>('#btn-title-start')!.onclick = () => this.go('name');
+    this.root.querySelector<HTMLButtonElement>('#btn-title-editor')!.onclick = () => this.onOpenEditor?.();
   }
 
   private destroyBackdrop(): void {
@@ -157,6 +169,10 @@ export class Lobby {
 
   private renderRooms(): void {
     this.destroyPreview();
+    // エディタで作り直されている・消されていることがあるので、表示のたびに読み直す
+    this.customStages = loadStages().filter((s) => validateStage(s).errors.length === 0);
+    const known = new Set([...STAGES.map((s) => s.id), ...this.customStages.map((s) => s.id)]);
+    this.createStages = this.createStages.map((id) => (known.has(id) ? id : DEFAULT_STAGE_ID));
     this.root.innerHTML = `
       <div class="scr">
         <div class="scr-head">
@@ -182,6 +198,7 @@ export class Lobby {
               .join('')}</div>
             <h3 class="section-title">セットごとのステージ</h3>
             <div class="set-stages" id="set-stages">${this.setStagesHtml()}</div>
+            <p class="lobby-note dim">🛠 は自作ステージ。タイトル画面の「ステージエディタ」で作ったものがここに出ます</p>
             <div class="btn-row modal-actions">
               <button class="btn" id="btn-cancel-create">やめる</button>
               <button class="btn big" id="btn-create">作成して入室</button>
@@ -208,7 +225,7 @@ export class Lobby {
       setStages.querySelectorAll<HTMLButtonElement>('.stage-pick').forEach((b) => {
         b.onclick = () => {
           const i = Number(b.dataset.set);
-          this.createStages[i] = getStage(b.dataset.stage).id;
+          this.createStages[i] = b.dataset.stage ?? DEFAULT_STAGE_ID;
           setStages.innerHTML = this.setStagesHtml();
           bindStageRows();
         };
@@ -239,10 +256,12 @@ export class Lobby {
       // すでに開いているルームなら参加のみ。新設なら試合構成を決めてから入る
       const active = Object.keys(this.roomIndex[`r_${code}`] ?? {}).length > 0;
       if (!active) {
-        this.net.set(`rooms/${code}/match`, {
-          sets: this.createSets,
-          stages: this.createStages.slice(0, this.createSets),
-        } satisfies MatchConfig);
+        const stages = this.createStages.slice(0, this.createSets);
+        const match: MatchConfig = { sets: this.createSets, stages };
+        // 自作ステージは作成者のブラウザにしか無いので、データごとルームに書いて全員に配る
+        const custom = this.customStages.filter((s) => stages.includes(s.id));
+        if (custom.length > 0) match.custom = Object.fromEntries(custom.map((s) => [s.id, s]));
+        this.net.set(`rooms/${code}/match`, match);
       }
       this.join(code);
     };
@@ -258,12 +277,22 @@ export class Lobby {
   private setStagesHtml(): string {
     const rows: string[] = [];
     for (let i = 0; i < this.createSets; i++) {
-      const picks = STAGES.map(
-        (st) => `
-          <button class="stage-pick ${st.id === this.createStages[i] ? 'selected' : ''}" data-set="${i}" data-stage="${st.id}" title="${st.desc}">
-            ${st.name}
+      const options = [
+        ...STAGES.map((st) => ({ id: st.id, name: st.name, desc: st.desc })),
+        ...this.customStages.map((st) => ({
+          id: st.id,
+          name: `🛠 ${st.name}`,
+          desc: `${st.w}×${st.h}マス・カメラ${st.cams.length}台・NPC${st.npcCount}人（自作）`,
+        })),
+      ];
+      const picks = options
+        .map(
+          (st) => `
+          <button class="stage-pick ${st.id === this.createStages[i] ? 'selected' : ''}" data-set="${i}" data-stage="${st.id}" title="${esc(st.desc)}">
+            ${esc(st.name)}
           </button>`,
-      ).join('');
+        )
+        .join('');
       rows.push(`<div class="set-row"><span class="set-label">第${i + 1}セット</span><div class="set-picks">${picks}</div></div>`);
     }
     return rows.join('');
@@ -300,6 +329,7 @@ export class Lobby {
 
   private join(room: string): void {
     this.room = room;
+    this.matchLoaded = false;
     const pid = this.net.clientId;
     this.net.set(`rooms/${room}/players/${pid}`, {
       name: this.name,
@@ -323,20 +353,24 @@ export class Lobby {
           if (!Object.keys(this.players).some((id) => id !== pid)) this.resetRoom();
         }
         this.render();
-        this.onUpdate?.(room, this.players, this.phase);
+        if (this.matchLoaded) this.onUpdate?.(room, this.players, this.phase);
       }),
       this.net.subscribe(`rooms/${room}/phase`, (val) => {
         this.phase = (val as PhaseState) ?? { phase: 'lobby' };
         this.render();
-        this.onUpdate?.(room, this.players, this.phase);
+        if (this.matchLoaded) this.onUpdate?.(room, this.players, this.phase);
       }),
       this.net.subscribe(`rooms/${room}/match`, (val) => {
         const m = val as Partial<MatchConfig> | null;
+        // 自作ステージを先に登録する（以降 getStage でIDから引ける）
+        for (const [id, raw] of Object.entries(m?.custom ?? {})) registerCustomStage(id, raw);
         const stages = Array.isArray(m?.stages) ? m.stages.map((id) => getStage(id).id) : [];
         const sets = Math.max(1, Math.floor(Number(m?.sets) || stages.length || 1));
         while (stages.length < sets) stages.push(stages[stages.length - 1] ?? DEFAULT_STAGE_ID);
         this.match = { sets, stages: stages.slice(0, sets) };
+        this.matchLoaded = true;
         this.render();
+        this.onUpdate?.(room, this.players, this.phase);
       }),
     );
     this.go('room');
@@ -606,7 +640,7 @@ export class Lobby {
             <p class="lobby-note">${
               isThief ? `${half}、あなたは 🐭 ネズミです。カプセルの色を選びながら、仲間と作戦会議をしましょう` : `${half}の開始を待っています`
             }</p>
-            <p class="lobby-note dim">ステージ: ${getStage(this.phase.stage).name}。時間になると自動で${half}が始まります${
+            <p class="lobby-note dim">ステージ: ${esc(getStage(this.phase.stage).name)}。時間になると自動で${half}が始まります${
               round === 1 ? '（ステージ紹介 → 3・2・1のカウントダウン）' : '（3・2・1のカウントダウン）'
             }。猫陣営はこの間、無人の店内でカメラ操作を練習しています</p>
           </div>

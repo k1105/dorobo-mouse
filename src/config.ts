@@ -117,6 +117,12 @@ export const PRICE_TIERS: readonly { name: string; min: number; color: number }[
   { name: '水色', min: 0, color: 0x7fd4ef },
 ] as const;
 
+/** 値段に対応する料金帯（PRICE_TIERS のインデックス）を返す */
+export function priceTierIndex(price: number): number {
+  const i = PRICE_TIERS.findIndex((t) => price >= t.min);
+  return i >= 0 ? i : PRICE_TIERS.length - 1;
+}
+
 /** 値段に対応する棚の色を返す */
 export function priceTierColor(price: number): number {
   return (PRICE_TIERS.find((t) => price >= t.min) ?? PRICE_TIERS[PRICE_TIERS.length - 1]).color;

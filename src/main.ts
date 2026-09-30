@@ -1,6 +1,7 @@
 import { createNet } from './net';
 import { Game } from './game/game';
 import { Lobby } from './ui/lobby';
+import { StageEditor } from './ui/editor';
 import { CONFIG } from './config';
 import { isMouseInRound, isStalePhase, type PhaseState } from './types';
 
@@ -17,6 +18,18 @@ async function boot(): Promise<void> {
     game.dispose();
     game = null;
     lobby.show();
+  };
+
+  // ステージエディタ（タイトル画面から開く。閉じるとタイトルに戻る）
+  let editor: StageEditor | null = null;
+  lobby.onOpenEditor = () => {
+    if (editor) return;
+    lobby.hide();
+    editor = new StageEditor(app, () => {
+      editor?.dispose();
+      editor = null;
+      lobby.show();
+    });
   };
 
   lobby.onUpdate = (room, players, phase) => {

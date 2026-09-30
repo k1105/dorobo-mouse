@@ -1,8 +1,8 @@
 import * as THREE from 'three';
-import { COLORS, ITEMS, priceTierColor, type Item } from '../config';
+import { COLORS, ITEMS, PRICE_TIERS, priceTierColor, priceTierIndex, type Item } from '../config';
 import { mulberry32, shuffled } from './rng';
 import { NavGrid, type NavLayer, type NavLink } from './nav';
-import type { RampDef, Rect, Side, StageDef } from './stages';
+import type { RampDef, Rect, ShelfDef, Side, StageDef } from './stages';
 
 export type { Rect, Side } from './stages';
 
@@ -115,9 +115,9 @@ export const LABEL_LAYER = 2;
 export const CAPSULE_Y = 0.7;
 
 const CAM_Y = 3.6; // 床面からのカメラの高さ
-const CAM_RANGE = 15;
+export const CAM_RANGE = 15;
 const WALL_H = 1.4; // 1Fの外周の壁
-const WALL_T = 0.6;
+export const WALL_T = 0.6;
 const RAIL_H = 1.0; // 上階の外周・吹き抜けの手すり
 const RAIL_T = 0.3;
 const PLATE_T = 0.3; // 上階の床板の厚み
@@ -128,6 +128,9 @@ function horizontalFovDeg(vfovDeg: number, aspect: number): number {
     (2 * Math.atan(Math.tan((vfovDeg * Math.PI) / 360) * aspect) * 180) / Math.PI
   );
 }
+
+/** 防犯カメラの水平画角（度）。ステージエディタの視野プレビューでも使う */
+export const CAM_HFOV_DEG = horizontalFovDeg(72, 16 / 9);
 
 /** スロープの下端から上端へ向かう割合（0=下端, 1=上端）。矩形の外でも延長線上で計算する */
 function rampAlong(r: RampDef, x: number, z: number): number {
@@ -236,6 +239,14 @@ export function buildWorld(scene: THREE.Scene, seed: number, stage: StageDef): W
   const itemRng = mulberry32(seed ^ 0x5e7a11);
   const itemPool = shuffled(ITEMS, itemRng);
   let shelfCounter = 0;
+  // 料金帯が指定された棚（ステージエディタ製）には、その帯の商品だけを順に割り当てる
+  const tierPools = PRICE_TIERS.map((_, ti) => itemPool.filter((it) => priceTierIndex(it.price) === ti));
+  const tierCounters = PRICE_TIERS.map(() => 0);
+  const pickItem = (s: ShelfDef): Item => {
+    const pool = s.tier !== undefined ? tierPools[s.tier] : undefined;
+    if (s.tier !== undefined && pool && pool.length > 0) return pool[tierCounters[s.tier]++ % pool.length];
+    return itemPool[shelfCounter++ % itemPool.length];
+  };
   const decoRng = mulberry32(12345); // 飾りは全クライアント共通の固定seed
   const decoGeo = new THREE.BoxGeometry(0.5, 0.4, 0.4);
 
@@ -281,8 +292,7 @@ export function buildWorld(scene: THREE.Scene, seed: number, stage: StageDef): W
     // 棚・ケース・平台（料金帯ごとに色分け）
     const shelfDraws: ShelfDraw[] = [];
     for (const s of f.shelves) {
-      const item = itemPool[shelfCounter % itemPool.length];
-      shelfCounter++;
+      const item = pickItem(s);
       const color = priceTierColor(item.price);
       const w = s.maxX - s.minX;
       const d = s.maxZ - s.minZ;
@@ -318,13 +328,17 @@ export function buildWorld(scene: THREE.Scene, seed: number, stage: StageDef): W
           else deco.position.set(s.maxX + off, y, p);
           addMesh(deco, fi);
         }
-        for (let p = from + 1.2; p <= to - 1.2 + 0.01; p += 2.8) {
+        for (let p = from + 1.2; !s.spots && p <= to - 1.2 + 0.01; p += 2.8) {
           const idx = spots.length;
           if (side === 'n') spots.push({ idx, x: p, z: s.minZ - SPOT_OFF, floor: fi, item });
           else if (side === 's') spots.push({ idx, x: p, z: s.maxZ + SPOT_OFF, floor: fi, item });
           else if (side === 'w') spots.push({ idx, x: s.minX - SPOT_OFF, z: p, floor: fi, item });
           else spots.push({ idx, x: s.maxX + SPOT_OFF, z: p, floor: fi, item });
         }
+      }
+      // スポットが直接指定された棚（ステージエディタ製）
+      for (const p of s.spots ?? []) {
+        spots.push({ idx: spots.length, x: p.x, z: p.z, floor: fi, item });
       }
     }
 

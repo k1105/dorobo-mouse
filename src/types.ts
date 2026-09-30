@@ -59,6 +59,11 @@ export interface MatchConfig {
   sets: number;
   /** セットごとのステージID */
   stages: string[];
+  /**
+   * stages で使うステージエディタ製ステージのデータ（ID → game/customStage.ts の CustomStageData）。
+   * ルーム作成者のブラウザにしか無いので、ルームに書いて全員に配る
+   */
+  custom?: Record<string, unknown>;
 }
 
 /** 各セットの勝敗から獲得セット数を数える（同額は両者に入れない） */

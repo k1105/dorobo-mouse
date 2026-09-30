@@ -7,9 +7,9 @@ type Op =
   | { op: 'hello'; from: string }
   | { op: 'snap'; to: string; tree: unknown };
 
-type Tree = Record<string, unknown>;
+export type Tree = Record<string, unknown>;
 
-function getIn(tree: unknown, parts: string[]): unknown {
+export function getIn(tree: unknown, parts: string[]): unknown {
   let cur: unknown = tree;
   for (const p of parts) {
     if (cur == null || typeof cur !== 'object') return null;
@@ -18,7 +18,7 @@ function getIn(tree: unknown, parts: string[]): unknown {
   return cur ?? null;
 }
 
-function setIn(tree: Tree, parts: string[], value: unknown): void {
+export function setIn(tree: Tree, parts: string[], value: unknown): void {
   let cur: Tree = tree;
   for (let i = 0; i < parts.length - 1; i++) {
     const p = parts[i];

@@ -1401,3 +1401,341 @@ body,
 .hud.intro .hud-top {
   display: none !important;
 }
+
+/* =========================================================
+   ステージエディタ（タイトル画面から開く。横長PC前提）
+   左: 自作ステージ一覧 / 中央: マス目 / 右: 設定・棚ブラシ・チェック
+   ========================================================= */
+.title-editor {
+  padding: 10px 22px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 999px;
+  background: rgba(16, 19, 26, 0.6);
+  color: #e9ecf1;
+  font-weight: 700;
+}
+.editor {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(#171b23, #10131a);
+  color: #e9ecf1;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ed-top {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 10px 16px;
+  border-bottom: 1px solid #2c3442;
+}
+.ed-top h1 {
+  font-size: 18px;
+  font-weight: 800;
+}
+.ed-tools {
+  display: flex;
+  gap: 4px;
+}
+.ed-tool {
+  padding: 8px 12px;
+  border: 1px solid #3a4453;
+  border-radius: 8px;
+  background: #1a2029;
+  color: #d6dbe4;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+  cursor: pointer;
+}
+.ed-tool.selected {
+  border-color: #ffb300;
+  background: #2b2717;
+  color: #ffb300;
+}
+.ed-tool:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.ed-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #b6bdc9;
+  cursor: pointer;
+}
+.ed-saved {
+  margin-left: auto;
+  font-size: 12px;
+  color: #8a93a3;
+}
+.ed-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr) 310px;
+}
+.ed-side {
+  min-height: 0;
+  padding: 14px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(30, 36, 48, 0.6);
+}
+.ed-left {
+  border-right: 1px solid #2c3442;
+}
+.ed-right {
+  border-left: 1px solid #2c3442;
+  gap: 18px;
+}
+.ed-stage {
+  min-width: 0;
+  min-height: 0;
+  padding: 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.ed-stage canvas {
+  display: block;
+  border-radius: 8px;
+  touch-action: none;
+}
+.ed-hint {
+  min-height: 3em;
+  max-width: 100%;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #8a93a3;
+  text-align: center;
+}
+.ed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ed-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid #3a4453;
+  border-radius: 8px;
+  background: #1a2029;
+  color: #d6dbe4;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ed-item.selected {
+  border-color: #ffb300;
+  background: #2b2717;
+}
+.ed-item-name {
+  font-size: 14px;
+  font-weight: 700;
+}
+.ed-item.selected .ed-item-name {
+  color: #ffb300;
+}
+.ed-item-meta {
+  font-size: 11px;
+  color: #8a93a3;
+}
+.ed-list-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.ed-list-actions .btn {
+  padding: 7px 4px;
+  font-size: 12px;
+}
+.btn.ed-danger {
+  color: #ff8d80;
+}
+.btn.ed-danger.armed {
+  grid-column: 1 / -1;
+  background: #b3261e;
+  color: #fff;
+}
+.ed-sec {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.ed-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #b6bdc9;
+}
+.ed-field small,
+.ed-tier small,
+.ed-kind small {
+  font-size: 11px;
+  font-weight: 400;
+  color: #8a93a3;
+}
+.ed-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.editor input:not([type='checkbox']) {
+  padding: 7px 9px;
+  border-radius: 8px;
+  border: 1px solid #3a4453;
+  background: #0f1319;
+  color: #eee;
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.editor input:focus {
+  border-color: #ffb300;
+}
+.editor input[type='number'] {
+  width: 64px;
+}
+.ed-tiers,
+.ed-kinds {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.ed-tier,
+.ed-kind {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 0 8px;
+  padding: 7px 9px;
+  border: 1px solid #3a4453;
+  border-radius: 8px;
+  background: #1a2029;
+  color: #d6dbe4;
+  font-size: 13px;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ed-kind {
+  grid-template-columns: 1fr;
+}
+.ed-tier i {
+  grid-row: span 2;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+}
+.ed-tier i.rnd,
+.ed-chip i.rnd {
+  background: #8f96a3;
+}
+.ed-tier.selected,
+.ed-kind.selected {
+  border-color: #ffb300;
+  background: #2b2717;
+}
+.ed-stats {
+  font-size: 12px;
+  color: #c9cfd9;
+  line-height: 1.6;
+}
+.ed-stats b {
+  color: #ffb300;
+}
+.ed-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  font-size: 12px;
+  color: #b6bdc9;
+}
+.ed-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ed-chip i {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.ed-issue {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.ed-issue.err {
+  color: #ff8d80;
+}
+.ed-issue.warn {
+  color: #f2c94c;
+}
+.ed-issue.ok {
+  color: #8bd49a;
+}
+.ed-test {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.ed-play {
+  padding: 11px 4px;
+  border: none;
+  border-radius: 10px;
+  background: #ffb300;
+  color: #1a1400;
+  font-size: 14px;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+}
+.ed-play:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.ed-play:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---- テストプレイ中の操作（右下。HUD・ミニマップ・カメラマップと重ならない位置） ---- */
+.test-bar {
+  position: absolute;
+  right: 24px;
+  bottom: 84px;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid #444;
+  border-radius: 12px;
+  background: rgba(18, 18, 24, 0.85);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+.test-bar-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffb300;
+  text-align: center;
+}
+.test-bar .btn {
+  padding: 7px 12px;
+  font-size: 13px;
+}
