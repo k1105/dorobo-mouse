@@ -2,6 +2,7 @@ import { createNet } from './net';
 import { Game } from './game/game';
 import { Lobby } from './ui/lobby';
 import { StageEditor } from './ui/editor';
+import { PadNav } from './ui/padnav';
 import { CONFIG } from './config';
 import { isMouseInRound, isStalePhase, type PhaseState } from './types';
 
@@ -11,6 +12,8 @@ async function boot(): Promise<void> {
   await net.ready();
 
   const lobby = new Lobby(app, net);
+  // ゲームパッドでのメニュー操作（アプリの寿命と同じ。ゲーム中の入力は Game 側の Controls が読む）
+  new PadNav();
   let game: Game | null = null;
 
   const closeGame = () => {

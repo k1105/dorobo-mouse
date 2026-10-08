@@ -129,7 +129,7 @@ export class Lobby {
           <p class="lobby-note dim">ゲーム中、仲間のカプセルの頭上にこの名前が出ます（12文字まで）</p>
           <label>名前 <input id="in-name" maxlength="12" placeholder="なまえ" value="${esc(this.name)}" /></label>
           <div class="btn-row">
-            <button class="btn" id="btn-back">戻る</button>
+            <button class="btn" id="btn-back" data-pad-back>戻る</button>
             <button class="btn big" id="btn-next">次へ</button>
           </div>
         </div>
@@ -177,7 +177,7 @@ export class Lobby {
       <div class="scr">
         <div class="scr-head">
           <h1>ルームを選ぶ</h1>
-          <span class="crumb"><b>${esc(this.name)}</b> として参加 <button class="link-btn" id="btn-back">名前を変える</button></span>
+          <span class="crumb"><b>${esc(this.name)}</b> として参加 <button class="link-btn" id="btn-back" data-pad-back>名前を変える</button></span>
         </div>
         <div class="panel rooms-panel">
           <h3 class="section-title">いま開いているルーム <small>クリックで参加</small></h3>
@@ -200,7 +200,7 @@ export class Lobby {
             <div class="set-stages" id="set-stages">${this.setStagesHtml()}</div>
             <p class="lobby-note dim">🛠 は自作ステージ。タイトル画面の「ステージエディタ」で作ったものがここに出ます</p>
             <div class="btn-row modal-actions">
-              <button class="btn" id="btn-cancel-create">やめる</button>
+              <button class="btn" id="btn-cancel-create" data-pad-back>やめる</button>
               <button class="btn big" id="btn-create">作成して入室</button>
             </div>
           </div>
@@ -516,7 +516,8 @@ export class Lobby {
           <p>🐱 猫: カメラマップには自分がオンにしたカメラの視野（赤）・相方がオンにしたカメラの視野（青）と死角が表示される（Mキーで表示/非表示）。🐭 ネズミは同じマップが左下に常時表示され、自分の位置が分かる</p>
           <p>🏬 「2フロア」ステージでは東側のスロープで2Fへ上がれる（NPCも行き来する）。出口は1Fのみ。猫のカメラマップは1F・2Fが横に並ぶ</p>
           <p>🏆 2ラウンドで盗んだ商品の累計金額が多いチームの勝ち</p>
-          <div class="btn-row modal-actions"><button class="btn" id="btn-rules-close">閉じる</button></div>
+          <p>🎮 コントローラー（PS4）でも操作できる。🐭 ネズミ: 左スティックで移動（一人称は左スティック上下で前進・後退、右スティック左右で向きを変える）、×を押し続けて盗む、△で視点切替。🎥 猫: 左スティックで照準を動かし、×でクリック（カメラ番号のON/OFF・ダウト）、□でカメラマップの表示/非表示。メニュー: 十字キー or 左スティックで選び、×で決定、○で戻る</p>
+          <div class="btn-row modal-actions"><button class="btn" id="btn-rules-close" data-pad-back>閉じる</button></div>
           </div>
         </div>
       </div>

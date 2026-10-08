@@ -50,6 +50,16 @@ body,
 .btn.active {
   outline: 2px solid #ffb300;
 }
+/* ゲームパッドでのメニュー操作の選択枠（PadNav が付け外しする） */
+.pad-focus {
+  outline: 3px solid #fff !important;
+  outline-offset: 2px;
+}
+/* スクロールする一覧の中では、枠が端で切れないよう内側に出す */
+.room-list .pad-focus,
+.set-stages .pad-focus {
+  outline-offset: -3px;
+}
 
 /* =========================================================
    ロビー（タイトル / 名前 / ルーム一覧 / ルーム / 着せ替え）
@@ -1337,6 +1347,33 @@ body,
 .mini-map canvas {
   display: block;
   border-radius: 6px;
+}
+
+/* ゲームパッドの照準カーソル（猫チーム。位置は CctvView が transform で動かす）。カメラマップ・HUDより手前 */
+.pad-aim {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 30px;
+  height: 30px;
+  margin: -15px 0 0 -15px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7), inset 0 0 0 1px rgba(0, 0, 0, 0.7);
+  z-index: 7;
+  pointer-events: none;
+}
+.pad-aim::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  margin: -2px 0 0 -2px;
+  border-radius: 50%;
+  background: #ffb300;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
 }
 
 /* ---- カメラ操作マップ（猫チーム・画面の一番下に常時表示。カメラ番号クリックでON/OFF） ---- */

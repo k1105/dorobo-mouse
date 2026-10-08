@@ -43,6 +43,7 @@ interface Layout {
  * 同時にオンラインにできるのは CONFIG.maxViewCams 台まで（満杯時は先にどれかをオフにする）。
  * オンラインのカメラは画面中央上寄りに横並びの3枚のモニタ（固定スロット）に表示される。
  * 映像内のキャラクターをクリックするとダウト（Game側でレイキャスト判定）。
+ * ゲームパッドでは左スティックで照準カーソルを動かし、その位置をマウスカーソルの代わりにする。
  */
 export class CctvView {
   /** スロットごとのカメラID（オフラインのスロットはnull。位置は固定） */
@@ -69,6 +70,12 @@ export class CctvView {
   private hoverSlot = -1;
   /** スロットごとの現在の拡大率（目標へ向かって毎フレーム補間） */
   private scales: number[] = [];
+  /** ゲームパッドの照準カーソル。スティックを動かすと出て、マウスを動かすと消える */
+  private aim: HTMLDivElement;
+  private aimShown = false;
+  /** 照準の位置（親要素内のCSSピクセル）。初めて出すときに画面中央へ置く */
+  private aimX = -1;
+  private aimY = -1;
 
   constructor(parent: HTMLElement, camCount: number) {
     this.parent = parent;
@@ -90,6 +97,11 @@ export class CctvView {
       this.overlay.appendChild(cell);
       this.cells.push(cell);
     }
+
+    // 照準はカメラマップの上にも動かすので、モニタ枠とは別に手前へ置く
+    this.aim = document.createElement('div');
+    this.aim.className = 'pad-aim hidden';
+    parent.appendChild(this.aim);
 
     parent.addEventListener('mousemove', this.onMouseMove);
     parent.addEventListener('mouseleave', this.onMouseLeave);
@@ -137,6 +149,40 @@ export class CctvView {
   setVisible(visible: boolean): void {
     this.overlay.classList.toggle('hidden', !visible);
     this.layoutDirty = true;
+    this.syncAim();
+  }
+
+  // ---- ゲームパッドの照準 ----
+
+  /**
+   * 照準カーソルを (dx, dy) ピクセル動かす（画面内に収める）。隠れていれば表示する。
+   * 照準が乗ったモニタはマウスカーソルと同じく拡大する
+   */
+  moveAim(dx: number, dy: number): void {
+    if (this.overlay.classList.contains('hidden')) return;
+    const w = this.parent.clientWidth;
+    const h = this.parent.clientHeight;
+    if (this.aimX < 0) {
+      this.aimX = w / 2;
+      this.aimY = h / 2;
+    }
+    this.aimX = Math.max(0, Math.min(w, this.aimX + dx));
+    this.aimY = Math.max(0, Math.min(h, this.aimY + dy));
+    this.aimShown = true;
+    this.syncAim();
+    this.hoverSlot = this.slotAt(this.aimX, this.aimY);
+  }
+
+  /** 照準の位置（clientX/clientY と同じビューポート座標）。照準が出ていなければ null */
+  aimPoint(): { x: number; y: number } | null {
+    if (!this.aimShown || this.overlay.classList.contains('hidden')) return null;
+    const rect = this.parent.getBoundingClientRect();
+    return { x: rect.left + this.aimX, y: rect.top + this.aimY };
+  }
+
+  private syncAim(): void {
+    this.aim.classList.toggle('hidden', !this.aimShown || this.overlay.classList.contains('hidden'));
+    this.aim.style.transform = `translate(${this.aimX}px, ${this.aimY}px)`;
   }
 
   /** HUDバーやマップの高さが変わったとき（マップの表示切替など）に次フレームでレイアウトし直す */
@@ -177,11 +223,19 @@ export class CctvView {
   }
 
   private onMouseMove = (e: MouseEvent): void => {
+    if (this.aimShown) {
+      // 照準の表示中は、実際にマウスが動いたときだけマウス操作へ戻す
+      // （モニタの拡大などレイアウトが変わるだけでも、動いていない mousemove が届くため）
+      if (e.movementX === 0 && e.movementY === 0) return;
+      this.aimShown = false;
+      this.syncAim();
+    }
     const rect = this.parent.getBoundingClientRect();
     this.hoverSlot = this.slotAt(e.clientX - rect.left, e.clientY - rect.top);
   };
 
   private onMouseLeave = (): void => {
+    if (this.aimShown) return;
     this.hoverSlot = -1;
   };
 
@@ -304,5 +358,6 @@ export class CctvView {
     this.parent.removeEventListener('mousemove', this.onMouseMove);
     this.parent.removeEventListener('mouseleave', this.onMouseLeave);
     this.overlay.remove();
+    this.aim.remove();
   }
 }

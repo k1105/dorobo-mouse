@@ -17,10 +17,10 @@ export const CONFIG = {
   maxViewCams: 3,
   /** 1ラウンドあたりのダウト回数（猫プレイヤーごと） */
   doubtsPerRound: 2,
-  /** 盗み中の左右揺れの振幅 */
-  swayAmp: 0.18,
-  /** 盗み中の左右揺れの周波数（Hz） */
-  swayHz: 1.8,
+  /** 盗み中に体の前で動かす手（球体）の振幅 */
+  rummageAmp: 0.15,
+  /** 盗み中の手の動きの周波数（Hz。左右の手が交互に動く） */
+  rummageHz: 2.4,
   /** 位置情報の送信頻度（Hz） */
   posSendHz: 10,
   /** ゲーム開始前カウントダウン（秒） */
@@ -43,6 +43,8 @@ export const CONFIG = {
   fpsEyeHeight: 1.2,
   /** 一人称でA/D・左右キーを押したときの旋回速度（rad/s） */
   fpsTurnSpeed: 2.5,
+  /** 猫のゲームパッド照準カーソルの最高速度（スティックを倒しきったときに1秒で進む距離。画面の高さ=1） */
+  padAimSpeed: 0.9,
 } as const;
 
 /**

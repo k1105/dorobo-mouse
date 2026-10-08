@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { COLORS, ITEMS, PRICE_TIERS, priceTierColor, priceTierIndex, type Item } from '../config';
+import { COLORS, CONFIG, ITEMS, PRICE_TIERS, priceTierColor, priceTierIndex, type Item } from '../config';
 import { mulberry32, shuffled } from './rng';
 import { NavGrid, type NavLayer, type NavLink } from './nav';
 import type { RampDef, Rect, ShelfDef, Side, StageDef } from './stages';
@@ -113,6 +113,11 @@ export const UPPER_LAYER_MIN_Y = 2.0;
 export const LABEL_LAYER = 2;
 /** ネズミのカプセルの足元から中心までの高さ（makeCapsule の position.y） */
 export const CAPSULE_Y = 0.7;
+/** 盗み中に出す手（球体）の半径と、本体中心から見た基準位置 */
+const HAND_RADIUS = 0.13;
+const HAND_X = 0.22;
+const HAND_Y = 0.3;
+const HAND_Z = 0.85;
 
 const CAM_Y = 3.6; // 床面からのカメラの高さ
 export const CAM_RANGE = 15;
@@ -768,6 +773,7 @@ export function makeNameLabel(name: string): THREE.Sprite {
  * 向き（rotation.y）が分かるように、前方（ローカル +z）に鼻先・目、頭頂に耳を付ける。
  * 耳と鼻先は本体と同じマテリアルを共有しているので、本体の色を変えれば一緒に変わる。
  * 返り値の Mesh が本体で、パーツは子オブジェクト。
+ * 左右の手（球体）も子として持つが普段は隠しておき、盗み中だけ animateStealHands で体の前に出す。
  */
 export function makeCapsule(color: number = COLORS.mouse): THREE.Mesh {
   const radius = 0.35;
@@ -807,5 +813,53 @@ export function makeCapsule(color: number = COLORS.mouse): THREE.Mesh {
     mesh.add(ear);
   }
 
+  // 手: 左右の球体。一人称で体だけ隠しても手は見せたいので、本体とはマテリアルを分ける
+  const handMat = new THREE.MeshStandardMaterial({ color });
+  const handGeo = new THREE.SphereGeometry(HAND_RADIUS, 12, 12);
+  const hands: THREE.Mesh[] = [];
+  for (const sx of [-1, 1]) {
+    const hand = new THREE.Mesh(handGeo, handMat);
+    hand.visible = false;
+    hand.position.set(sx * HAND_X, HAND_Y, HAND_Z);
+    mesh.add(hand);
+    hands.push(hand);
+  }
+  mesh.userData.hands = hands;
+
   return mesh;
+}
+
+/**
+ * 盗みモーション: 手の球体を体の前に出し、左右交互に上下・前後させて棚をあさっているように見せる。
+ * active=false なら手を隠す。t は秒（ゲーム時刻）。自分と他プレイヤーの両方で同じ動きを再生する
+ */
+export function animateStealHands(mesh: THREE.Mesh, active: boolean, t: number): void {
+  const hands = mesh.userData.hands as THREE.Mesh[] | undefined;
+  if (!hands) return;
+  for (let i = 0; i < hands.length; i++) {
+    const hand = hands[i];
+    hand.visible = active;
+    if (!active) continue;
+    const side = i === 0 ? -1 : 1;
+    // 左右で位相を半周ずらして交互に動かす。横揺れは別の周期を混ぜて機械的に見えないようにする
+    const phase = t * CONFIG.rummageHz * Math.PI * 2 + i * Math.PI;
+    const amp = CONFIG.rummageAmp;
+    hand.position.set(
+      side * HAND_X + Math.sin(phase * 1.7) * amp * 0.5,
+      HAND_Y + Math.sin(phase) * amp,
+      HAND_Z + Math.cos(phase) * amp * 0.6,
+    );
+  }
+}
+
+/**
+ * 本体と顔パーツの表示を切り替える（手はそのまま）。
+ * 一人称視点で自分のカプセルが視界を塞がないように隠しつつ、盗み中の手は見えるようにするためのもの
+ */
+export function setCapsuleBodyVisible(mesh: THREE.Mesh, visible: boolean): void {
+  (mesh.material as THREE.Material).visible = visible;
+  const hands = (mesh.userData.hands as THREE.Mesh[] | undefined) ?? [];
+  for (const c of mesh.children) {
+    if (!hands.includes(c as THREE.Mesh)) c.visible = visible;
+  }
 }

@@ -286,12 +286,12 @@ export class CamMapView {
     this.map = this.redraw();
 
     this.canvas.addEventListener('click', (e) => {
-      const id = this.camAt(e);
+      const id = this.camAt(e.clientX, e.clientY);
       if (id !== null) onCamClick(id);
     });
     // カメラの上ではカーソルをポインタにする
     this.canvas.addEventListener('mousemove', (e) => {
-      this.canvas.style.cursor = this.camAt(e) !== null ? 'pointer' : 'default';
+      this.canvas.style.cursor = this.camAt(e.clientX, e.clientY) !== null ? 'pointer' : 'default';
     });
   }
 
@@ -328,14 +328,19 @@ export class CamMapView {
     this.root.classList.add('deny');
   }
 
-  /** クリック位置に一番近いカメラ（判定半径内）のID */
-  private camAt(e: MouseEvent): number | null {
+  /**
+   * ビューポート座標（clientX/clientY）の位置に一番近いカメラ（判定半径内）のID。
+   * マウスのクリックと、ゲームパッドの照準カーソルの両方から使う
+   */
+  camAt(clientX: number, clientY: number): number | null {
     const rect = this.canvas.getBoundingClientRect();
+    // マップを隠している（Mキー・ステージ紹介中）ときは何も指していない
+    if (rect.width === 0 || rect.height === 0) return null;
     // CSS上の表示サイズが描画サイズと異なる場合（縮小表示）に備えて換算する
     const sx = this.map.cssW / rect.width;
     const sy = this.map.cssH / rect.height;
-    const px = (e.clientX - rect.left) * sx;
-    const py = (e.clientY - rect.top) * sy;
+    const px = (clientX - rect.left) * sx;
+    const py = (clientY - rect.top) * sy;
     let best: number | null = null;
     let bestD = CAM_HIT_R;
     this.data.floors.forEach((floor, fi) => {

@@ -5,6 +5,7 @@ import type { GameEvent, PhaseState, PlayerInfo, PosMsg, Role, Round, SetResult,
 import { isMouseInRound, miceTeamOf, setsWon, teamOf } from '../types';
 import { mulberry32 } from './rng';
 import { Controls } from './controls';
+import { PAD } from './gamepad';
 import { CctvView } from './cctv';
 import { CamMapView, MiniMapView } from '../ui/map';
 import { createNpcSims, NpcSim } from './npc';
@@ -13,6 +14,8 @@ import {
   CAPSULE_Y,
   LABEL_LAYER,
   makeCapsule,
+  animateStealHands,
+  setCapsuleBodyVisible,
   makeNameLabel,
   UPPER_LAYER,
   UPPER_LAYER_MIN_Y,
@@ -37,7 +40,7 @@ interface IntroShot {
 interface RemoteAvatar {
   mesh: THREE.Mesh;
   target: PosMsg | null;
-  /** 補間済みの実位置（揺れオフセットを含まない）。mesh.positionは表示用でこれに揺れを足す */
+  /** 補間済みの実位置。mesh.position はこれを追う表示用 */
   sx: number;
   sz: number;
   /** 補間済みの高さ（スロープの昇り降りで段差に見えないように） */
@@ -297,6 +300,7 @@ export class Game {
     }
 
     this.controls.onKey = (code) => this.onKey(code);
+    this.controls.onPadButton = (button, down) => this.onPadButton(button, down);
 
     // ネットワーク購読
     this.unsubs.push(
@@ -832,20 +836,59 @@ export class Game {
     this.cctv?.handleKey(code);
   }
 
+  /**
+   * ゲームパッドのボタン。×: ネズミは押している間だけ盗む（画面の「盗む」ボタンの長押しと同じ）、
+   * 猫は照準の位置をクリック。△: 視点切替（観戦中は俯瞰のフロア切替）。□: カメラマップの表示切替
+   */
+  private onPadButton(button: number, down: boolean): void {
+    if (button === PAD.cross) {
+      if (this.amMouse) {
+        if (down) this.tryStartSteal();
+        else this.cancelSteal();
+      } else if (down) {
+        this.padClick();
+      }
+      return;
+    }
+    if (!down) return;
+    if (button === PAD.triangle) {
+      if (this.myMesh) this.toggleFpsMode();
+      else this.onKey('KeyF');
+    } else if (button === PAD.square) {
+      this.onKey('KeyM');
+    }
+  }
+
+  /** 猫: 照準カーソルの位置をマウスでクリックしたのと同じ扱いにする（カメラマップの番号ならオン/オフ、映像ならダウト） */
+  private padClick(): void {
+    if (!this.cctv) return;
+    const p = this.cctv.aimPoint();
+    if (!p) {
+      // 照準が出ていない（マウスで操作していた）ときは、見えない位置を押さないよう表示だけする
+      this.cctv.moveAim(0, 0);
+      return;
+    }
+    const camId = this.camMap?.camAt(p.x, p.y) ?? null;
+    if (camId !== null) this.cctv.toggleCam(camId);
+    else this.doubtAt(p.x, p.y);
+  }
+
   private doubtsLeft(): number {
     return Math.max(0, CONFIG.doubtsPerRound - this.myDoubtsUsed);
   }
 
-  /** 猫のダウト: カメラ映像内のキャラクターをクリック → レイキャストで対象を特定 */
-  private onCanvasClick = (e: MouseEvent): void => {
+  private onCanvasClick = (e: MouseEvent): void => this.doubtAt(e.clientX, e.clientY);
+
+  /** 猫のダウト: カメラ映像内のキャラクターをクリック（位置はビューポート座標）→ レイキャストで対象を特定 */
+  private doubtAt(clientX: number, clientY: number): void {
     if (!this.cctv || this.phase.phase !== 'playing') return;
     if ((this.phase.round ?? 1) !== this.round) return;
     const t = this.gameTime();
     if (t < 0) return;
     const rect = this.renderer.domElement.getBoundingClientRect();
     const pick = this.cctv.pick(
-      e.clientX - rect.left,
-      e.clientY - rect.top,
+      clientX - rect.left,
+      clientY - rect.top,
       rect.width,
       rect.height,
       this.world.cctvCams,
@@ -892,7 +935,7 @@ export class Game {
         at: Date.now(),
       } satisfies GameEvent);
     }
-  };
+  }
 
   // ---- メインループ ----
 
@@ -909,6 +952,7 @@ export class Game {
     const t = this.gameTime();
     const playing =
       this.phase.phase === 'playing' && (this.phase.round ?? 1) === this.round && t >= 0;
+    this.controls.pollPad();
 
     // ダウト演出中に見えたまま固まる時間。過ぎたら退場（アバターが消えて俯瞰の観戦に切り替わる）
     if (this.myMesh && this.eliminateAt !== null && t >= this.eliminateAt) {
@@ -928,7 +972,7 @@ export class Game {
     // 自分の移動（実位置=base。表示位置は揺れモーションを足す）。ダウト演出中は動けない
     if (this.myMesh && playing && this.eliminateAt === null) {
       if (this.fpsMode) {
-        // 一人称: A/D・左右で向きを回し、W/S・上下で向いている方向へ前進/後退
+        // 一人称: A/D・左右（右スティック）で向きを回し、W/S・上下（左スティック）で向いている方向へ前進/後退
         const inp = this.controls.fpsInput();
         // 前方ベクトルは(sin(ry), cos(ry))なので、ryを増やすと左旋回になる
         this.myMesh.rotation.y -= inp.turn * CONFIG.fpsTurnSpeed * dt;
@@ -946,22 +990,22 @@ export class Game {
         }
       }
     }
-    if (this.myMesh) {
-      // 盗み中は体を小さな円を描くように揺さぶる（一方向の往復だとカメラの視線と揺れの軸が
-      // 一致したとき奥行き方向の動きになって見えないため、XZ両軸に動かす）
-      const swaying = playing && this.stealStart !== null;
-      let ox = 0;
-      let oz = 0;
-      if (swaying) {
-        const phase = t * CONFIG.swayHz * Math.PI * 2;
-        ox = Math.cos(phase) * CONFIG.swayAmp;
-        oz = Math.sin(phase) * CONFIG.swayAmp;
+    // 猫: ゲームパッドの左スティックで照準カーソルを動かす（×でその位置をクリック）
+    if (this.cctv) {
+      const aim = this.controls.aimVec();
+      if (aim.x !== 0 || aim.y !== 0) {
+        const speed = this.container.clientHeight * CONFIG.padAimSpeed * dt;
+        this.cctv.moveAim(aim.x * speed, aim.y * speed);
       }
-      this.myMesh.position.x = this.base.x + ox;
-      this.myMesh.position.z = this.base.z + oz;
+    }
+    if (this.myMesh) {
+      // 盗み中は手の球体を体の前に出して棚をあさるモーションを再生する（体の位置は動かさない）
+      const stealing = playing && this.stealStart !== null;
+      animateStealHands(this.myMesh, stealing, t);
+      this.myMesh.position.x = this.base.x;
+      this.myMesh.position.z = this.base.z;
       this.myMesh.position.y = CAPSULE_Y + this.world.heightAt(this.base.x, this.base.z, this.base.floor);
-      // 位置送信（スロットリング）。揺れは低頻度送信+補間で潰れるため位置には含めず、
-      // swayフラグを送って受信側にローカルで再生させる
+      // 位置送信（スロットリング）。盗みモーションは sway フラグを送って受信側にローカルで再生させる
       if (playing && now - this.lastPosSend > 1000 / CONFIG.posSendHz) {
         this.lastPosSend = now;
         this.net.set(`rooms/${this.room}/pos/${this.net.clientId}`, {
@@ -971,14 +1015,14 @@ export class Game {
           ry: this.myMesh.rotation.y,
           t: Date.now(),
           hidden: false,
-          sway: swaying,
+          sway: stealing,
         } satisfies PosMsg);
       }
     }
     if (this.myMesh) {
-      // 一人称モード中は自分のカプセルが視界を塞ぐので隠す
+      // 一人称モード中は自分のカプセルが視界を塞ぐので体と顔を隠す（盗み中の手は一人称でも見える）
       const visible = !this.fpsMode;
-      this.myMesh.visible = visible;
+      setCapsuleBodyVisible(this.myMesh, visible);
       if (this.selfRing) {
         this.selfRing.visible = visible;
         this.selfRing.position.x = this.myMesh.position.x;
@@ -1022,17 +1066,11 @@ export class Game {
         r.sx += (r.target.x - r.sx) * k;
         r.sz += (r.target.z - r.sz) * k;
       }
-      // 盗みモーションは補間位置に対してローカルで再生する（自分の表示と同じ円運動）
-      let rox = 0;
-      let roz = 0;
-      if (r.target.sway) {
-        const phase = t * CONFIG.swayHz * Math.PI * 2;
-        rox = Math.cos(phase) * CONFIG.swayAmp;
-        roz = Math.sin(phase) * CONFIG.swayAmp;
-      }
+      // 盗みモーション（手の動き）は補間位置の上でローカルに再生する（自分の表示と同じ動き）
+      animateStealHands(r.mesh, !!r.target.sway, t);
       const ty = this.world.heightAt(r.sx, r.sz, r.target.f ?? 0);
       r.sy = dist > 4 ? ty : r.sy + (ty - r.sy) * Math.min(1, dt * 12);
-      r.mesh.position.set(r.sx + rox, CAPSULE_Y + r.sy, r.sz + roz);
+      r.mesh.position.set(r.sx, CAPSULE_Y + r.sy, r.sz);
       r.mesh.rotation.y = r.target.ry;
       this.assignLayer(r.mesh, r.sy);
     }
@@ -1175,12 +1213,10 @@ export class Game {
       this.followCam.layers.enable(UPPER_LAYER);
       const dx = Math.sin(this.myMesh.rotation.y);
       const dz = Math.cos(this.myMesh.rotation.y);
-      // 揺れモーション込みの表示位置ではなく実位置(base)に置く（カメラまで揺れると画面酔いするため）
       const eye = groundY + CONFIG.fpsEyeHeight;
       this.followCam.position.set(x, eye, z);
       this.followCam.lookAt(x + dx, eye - 0.15, z + dz);
     } else if (this.myMesh) {
-      // 揺れモーション込みの表示位置ではなく実位置(base)を追従する（カメラまで揺れると画面酔いするため）。
       // 1F（上階の床板の下）にいるときは上階レイヤを描かない
       const upper = groundY >= UPPER_LAYER_MIN_Y;
       if (upper) this.followCam.layers.enable(UPPER_LAYER);
