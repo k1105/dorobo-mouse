@@ -11,24 +11,24 @@ export const CONFIG = {
   npcSpeedMax: 3.0,
   /** NPCが小走りするときの速度倍率 */
   npcScurryMult: 1.6,
-  /** 1ラウンドの制限時間（秒）。時間切れで攻守交代（全2ラウンド） */
+  /** 1ターンの制限時間（秒）。時間切れで攻守交代（1ラウンド = 第1ターン＋第2ターン） */
   roundTimeSec: 60,
-  /** 猫プレイヤー1人が同時に接続（表示）できるカメラ台数（CCTV画面上段のモニタ数） */
+  /** 監視サイドのプレイヤー1人が同時に接続（表示）できるカメラ台数（CCTV画面上段のモニタ数） */
   maxViewCams: 3,
-  /** 1ラウンドあたりのダウト回数（猫プレイヤーごと） */
-  doubtsPerRound: 2,
+  /** 1ターンあたりのダウト回数（監視サイドのプレイヤーごと） */
+  doubtsPerRound: 3,
   /** 盗み中に体の前で動かす手（球体）の振幅 */
   rummageAmp: 0.15,
   /** 盗み中の手の動きの周波数（Hz。左右の手が交互に動く） */
   rummageHz: 2.4,
   /** 位置情報の送信頻度（Hz） */
   posSendHz: 10,
-  /** ゲーム開始前カウントダウン（秒） */
+  /** ターン開始前カウントダウン（秒）。攻守それぞれのスタート画面で 3→2→1 */
   countdownSec: 3,
-  /** 前半開始前のステージ紹介（スイープするカメラ3カット）の長さ（秒） */
-  introSec: 9,
-  /** 攻守交代時の着せ替え・作戦会議の時間（秒） */
-  costumeSec: 60,
+  /** 各ターン開始前のフィールドインサート（店内をなめるカメラ映像）の長さ（秒） */
+  introSec: 3,
+  /** 各ターン前の作戦会議タイムの長さ（秒） */
+  planningSec: 30,
   /** セット終了のリザルト表示から次のセットの準備に移るまでの時間（秒） */
   setEndSec: 12,
   /** ルーム作成時に選べるセット数の選択肢 */
@@ -37,19 +37,19 @@ export const CONFIG = {
   doubtEffectSec: 2.5,
   /** 追従カメラの視野角（度） */
   followFov: 60,
-  /** 一人称（泥棒目線）カメラの視野角（度） */
+  /** 一人称（まんびき目線）カメラの視野角（度） */
   fpsFov: 75,
   /** 一人称カメラの目の高さ（カプセルの頭頂が1.4） */
   fpsEyeHeight: 1.2,
   /** 一人称でA/D・左右キーを押したときの旋回速度（rad/s） */
   fpsTurnSpeed: 2.5,
-  /** 猫のゲームパッド照準カーソルの最高速度（スティックを倒しきったときに1秒で進む距離。画面の高さ=1） */
+  /** 監視サイドのゲームパッド照準カーソルの最高速度（スティックを倒しきったときに1秒で進む距離。画面の高さ=1） */
   padAimSpeed: 0.9,
 } as const;
 
 /**
- * アバター（カプセル）の色パレット。プレイヤーは着せ替えでここから選び、
- * NPCも同じパレットからseedで配色するため、色ではプレイヤーとNPCを見分けられない
+ * アバター（カプセル）の色パレット。プレイヤーの変装はここからランダムに決まり、
+ * NPC（一般客）も同じパレットからseedで配色するため、色ではプレイヤーとNPCを見分けられない
  */
 export const AVATAR_PALETTE: readonly { name: string; hex: number }[] = [
   { name: 'レッド', hex: 0xe0453a },
@@ -79,37 +79,38 @@ export const COLORS = {
   caught: 0x2ecc71,
 } as const;
 
-/** 盗む商品のリスト（値段は円。持ち出しに成功すると値段分がチームスコアに加算される） */
+/** 盗む商品のリスト（price はポイント。持ち出しに成功するとその分がチームスコアに加算される） */
 export interface Item {
   name: string;
   price: number;
 }
 
+/** ネズミたちの好物（ピーナッツ・チョコレート・チーズなど）。ポイントの幅は 120〜900 */
 export const ITEMS: readonly Item[] = [
-  { name: 'スナック菓子', price: 150 },
-  { name: '牛乳', price: 250 },
-  { name: 'チーズ', price: 400 },
-  { name: '食パン', price: 200 },
-  { name: 'りんご', price: 180 },
-  { name: 'バナナ', price: 150 },
+  { name: 'ピーナッツ', price: 150 },
   { name: 'チョコレート', price: 250 },
-  { name: 'カップ麺', price: 200 },
-  { name: 'おにぎり', price: 150 },
-  { name: 'ジュース', price: 160 },
-  { name: 'ヨーグルト', price: 180 },
-  { name: '卵', price: 300 },
-  { name: 'ハム', price: 350 },
+  { name: 'カマンベール', price: 400 },
+  { name: 'クラッカー', price: 200 },
+  { name: 'ドライフルーツ', price: 180 },
+  { name: 'ひまわりの種', price: 150 },
+  { name: 'キャラメル', price: 250 },
+  { name: 'ポップコーン', price: 200 },
+  { name: 'おせんべい', price: 150 },
+  { name: 'マシュマロ', price: 160 },
+  { name: 'アーモンド', price: 180 },
   { name: 'クッキー', price: 300 },
-  { name: 'アイスクリーム', price: 280 },
-  { name: 'コーヒー豆', price: 800 },
-  { name: 'はちみつ', price: 900 },
-  { name: 'バター', price: 450 },
-  { name: 'シリアル', price: 500 },
-  { name: 'グミ', price: 120 },
+  { name: 'スモークチーズ', price: 350 },
+  { name: 'ナッツミックス', price: 300 },
+  { name: 'チーズケーキ', price: 280 },
+  { name: '高級チーズ', price: 800 },
+  { name: 'トリュフチーズ', price: 900 },
+  { name: 'ブルーチーズ', price: 450 },
+  { name: '熟成ゴーダ', price: 500 },
+  { name: 'クルトン', price: 120 },
 ] as const;
 
 /**
- * 料金帯ごとの棚の色。値段が min 以上なら上から順に最初に当てはまる帯になる。
+ * 料金帯ごとの棚の色。ポイントが min 以上なら上から順に最初に当てはまる帯になる。
  * 高い順に 金・銀・銅、安いものは水色。
  */
 export const PRICE_TIERS: readonly { name: string; min: number; color: number }[] = [
@@ -119,13 +120,13 @@ export const PRICE_TIERS: readonly { name: string; min: number; color: number }[
   { name: '水色', min: 0, color: 0x7fd4ef },
 ] as const;
 
-/** 値段に対応する料金帯（PRICE_TIERS のインデックス）を返す */
+/** ポイントに対応する料金帯（PRICE_TIERS のインデックス）を返す */
 export function priceTierIndex(price: number): number {
   const i = PRICE_TIERS.findIndex((t) => price >= t.min);
   return i >= 0 ? i : PRICE_TIERS.length - 1;
 }
 
-/** 値段に対応する棚の色を返す */
+/** ポイントに対応する棚の色を返す */
 export function priceTierColor(price: number): number {
   return (PRICE_TIERS.find((t) => price >= t.min) ?? PRICE_TIERS[PRICE_TIERS.length - 1]).color;
 }

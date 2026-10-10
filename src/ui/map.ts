@@ -14,7 +14,7 @@ const MAX_H_RATIO = 0.75;
 /** 文字・マーカーの拡大率の上限（BASE_SCALE 比）。組み込みで一番小さい「シンプル」の倍率（約1.47）は変えない */
 const MAX_MARK_SCALE = 1.5;
 
-/** 店内レイアウトと各カメラの視野を俯瞰で描く。猫のモーダルとネズミのミニマップで共有する */
+/** 店内レイアウトと各カメラの視野を俯瞰で描く。監視サイドのカメラマップ・まんびきサイドのミニマップ・作戦会議のマップで共有する */
 interface MapCanvas {
   canvas: HTMLCanvasElement;
   /** ワールド座標 → キャンバス座標（CSSピクセル）。floor はどのフロアの枠に描くか */
@@ -29,26 +29,37 @@ function widthFor(perFloor: number, floors: number): number {
   return Math.round(perFloor * (1 + (floors - 1) * 0.6));
 }
 
-/** 猫の操作用マップで、誰がどのカメラをオンラインにしているか */
+/** 監視サイドの操作用マップで、誰がどのカメラをオンラインにしているか */
 interface CamOnline {
   /** 自分がオンラインにしているカメラ（赤で描く） */
   mine: ReadonlySet<number>;
-  /** 相方（他の猫プレイヤー）がオンラインにしているカメラ（青で描く） */
+  /** 相方（もう1人の監視サイド）がオンラインにしているカメラ（青で描く） */
   others: ReadonlySet<number>;
 }
+
+interface DrawOptions {
+  online?: CamOnline;
+  /** 棚ごとの商品名とポイントを描く（作戦会議のマップ用） */
+  prices?: boolean;
+}
+
+/** 作戦会議のマップの1フロアあたりの表示幅（CSSピクセル） */
+const STRATEGY_W = 720;
 
 /**
  * 店内マップを描画したキャンバスを作る。
  * 視野は棚・壁で遮蔽された実効範囲を2Dレイキャストで求めて扇形に描く。塗られていない床が「死角」。
  * online を渡すと、自分がオンラインにしたカメラを赤、相方がオンラインにしたカメラを青の視野で描き、
- * 誰もオンにしていないカメラは薄い輪郭のみにする（猫の操作用）。
+ * 誰もオンにしていないカメラは薄い輪郭のみにする（監視サイドの操作用）。
+ * prices を付けると棚に商品名とポイントも描く（作戦会議用）。
  */
 function drawMap(
   canvas: HTMLCanvasElement,
   data: MapData,
   maxW: number,
-  online?: CamOnline,
+  opts: DrawOptions = {},
 ): MapCanvas {
+  const { online, prices } = opts;
   const pad = 0.8;
   const floors = data.floors;
   // フロアを横に並べる。各フロアの枠の左端（ワールド単位のオフセット）
@@ -143,7 +154,14 @@ function drawMap(
         ctx.lineTo(tx(cam.x + Math.cos(a) * d, fi), tz(cam.z + Math.sin(a) * d, fi));
       }
       ctx.closePath();
-      if (isOn(cam.id)) {
+      if (prices) {
+        // 作戦会議: 誰のカメラでもないので中立の薄い扇形（重なった場所ほど濃い）
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.09)';
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      } else if (isOn(cam.id)) {
         // 相方が見ている視野は青、自分の視野は赤。両方オンなら重ねて描く
         if (isOthers(cam.id)) {
           ctx.fillStyle = 'rgba(80, 170, 255, 0.16)';
@@ -169,7 +187,7 @@ function drawMap(
       }
     }
 
-    // 棚（料金帯ごとに色分け + 売り場ラベル）
+    // 棚（料金帯ごとに色分け + 売り場ラベル。作戦会議では商品名とポイントも）
     for (const s of floor.shelves) {
       const w = (s.rect.maxX - s.rect.minX) * scale;
       const h = (s.rect.maxZ - s.rect.minZ) * scale;
@@ -181,15 +199,23 @@ function drawMap(
       ctx.font = `bold ${fs(9)}px sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      if (w >= h) {
-        ctx.fillText(s.label, x + w / 2, y + h / 2, w - 2);
+      const long = Math.max(w, h);
+      // 棚の長辺に沿って文字を描く。prices のときは「商品名 Npt」を主役にし、売り場ラベルは小さく添える
+      const main = prices ? `${s.item.name} ${s.item.price}pt` : s.label;
+      const sub = prices && s.label ? s.label : '';
+      ctx.save();
+      ctx.translate(x + w / 2, y + h / 2);
+      if (w < h) ctx.rotate(-Math.PI / 2);
+      if (sub) {
+        ctx.font = `bold ${fs(9)}px sans-serif`;
+        ctx.fillText(main, 0, -fs(5), long - 2);
+        ctx.font = `${fs(7)}px sans-serif`;
+        ctx.fillStyle = 'rgba(28, 28, 34, 0.75)';
+        ctx.fillText(sub, 0, fs(5), long - 2);
       } else {
-        ctx.save();
-        ctx.translate(x + w / 2, y + h / 2);
-        ctx.rotate(-Math.PI / 2);
-        ctx.fillText(s.label, 0, 0, h - 2);
-        ctx.restore();
+        ctx.fillText(main, 0, 0, long - 2);
       }
+      ctx.restore();
     }
 
     // 外周の壁と出口
@@ -218,7 +244,7 @@ function drawMap(
       ctx.fillText(floor.name, fx + fs(16), fy - 2);
     }
 
-    // カメラ本体と番号（猫の操作用マップでは大きく描いてクリックしやすくし、オフラインは灰色にする）。
+    // カメラ本体と番号（監視サイドの操作用マップでは大きく描いてクリックしやすくし、オフラインは灰色にする）。
     // 自分がオンにしたカメラは赤、相方だけがオンにしたカメラは青、両方なら赤い本体に青いリング
     const camR = online ? fs(14) : fs(5);
     for (const cam of floor.cams) {
@@ -235,7 +261,7 @@ function drawMap(
       }
       ctx.beginPath();
       ctx.arc(x, y, camR, 0, Math.PI * 2);
-      ctx.fillStyle = mine ? '#d32f2f' : others ? '#3d9be9' : '#5a5f68';
+      ctx.fillStyle = prices ? '#d32f2f' : mine ? '#d32f2f' : others ? '#3d9be9' : '#5a5f68';
       ctx.fill();
       ctx.strokeStyle = on ? '#fff' : '#aaa';
       ctx.lineWidth = 1.5;
@@ -255,9 +281,9 @@ function drawMap(
 const CAM_HIT_R = 20;
 
 /**
- * 猫チーム用のカメラ操作マップ。CCTV画面の一番下に常時表示し、
+ * 監視サイド用のカメラ操作マップ。CCTV画面の一番下に常時表示し、
  * マップ上のカメラ番号をクリックするとそのカメラをオンライン⇔オフラインする。
- * 自分がオンにしたカメラは赤い視野、相方（他の猫）がオンにしたカメラは青い視野、オフラインは灰色。
+ * 自分がオンにしたカメラは赤い視野、相方（もう1人の監視サイド）がオンにしたカメラは青い視野、オフラインは灰色。
  * Mキーで表示/非表示。
  */
 export class CamMapView {
@@ -297,8 +323,7 @@ export class CamMapView {
 
   private redraw(): MapCanvas {
     return drawMap(this.canvas, this.data, widthFor(CANVAS_W, this.data.floors.length), {
-      mine: this.online,
-      others: this.others,
+      online: { mine: this.online, others: this.others },
     });
   }
 
@@ -314,7 +339,7 @@ export class CamMapView {
     this.status.textContent = `${ids.length}/${max} ONLINE`;
   }
 
-  /** 相方（他の猫プレイヤー）がオンラインにしているカメラを反映して描き直す */
+  /** 相方（もう1人の監視サイド）がオンラインにしているカメラを反映して描き直す */
   setOthers(ids: ReadonlySet<number>): void {
     if (ids.size === this.others.size && [...ids].every((id) => this.others.has(id))) return;
     this.others = new Set(ids);
@@ -370,7 +395,7 @@ export class CamMapView {
 }
 
 /**
- * ネズミ用のミニマップ。猫のカメラマップと同じ図を画面左下に常時表示し、
+ * まんびきサイド用のミニマップ。監視サイドのカメラマップと同じ図を画面左下に常時表示し、
  * 自分の位置と向きを毎フレーム重ねて描く（静止画は一度だけ描いてコピーする）。
  */
 export class MiniMapView {
@@ -434,5 +459,25 @@ export class MiniMapView {
 
   dispose(): void {
     this.root.remove();
+  }
+}
+
+/**
+ * 作戦会議タイムのマップ。店内の俯瞰に、棚ごとの商品名とポイント、全カメラの視野（遮蔽込み）を描く。
+ * 両チームが同じ図を見ながら、どこを狙うか／どこを見張るかを相談する
+ */
+export class StrategyMapView {
+  readonly el: HTMLDivElement;
+
+  constructor(data: MapData) {
+    this.el = document.createElement('div');
+    this.el.className = 'strategy-map';
+    const canvas = document.createElement('canvas');
+    drawMap(canvas, data, widthFor(STRATEGY_W, data.floors.length), { prices: true });
+    this.el.appendChild(canvas);
+  }
+
+  dispose(): void {
+    this.el.remove();
   }
 }

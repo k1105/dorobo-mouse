@@ -62,7 +62,7 @@ body,
 }
 
 /* =========================================================
-   ロビー（タイトル / 名前 / ルーム一覧 / ルーム / 着せ替え）
+   ロビー（タイトル / イントロ / 名前 / エリア一覧 / ロビー / 作戦会議）
    横長PC前提。1枚のカードに詰めず、画面を左右に使う。
    色: 監視室の暗いネイビーを基調に、アクセントはゲーム内と同じ黄色1つ。
    ========================================================= */
@@ -249,6 +249,14 @@ body,
     0 4px 0 #c98700,
     0 10px 40px rgba(0, 0, 0, 0.7);
 }
+.title-sub {
+  margin-top: -14px;
+  font-size: clamp(16px, 2.2vw, 28px);
+  font-weight: 800;
+  letter-spacing: 0.3em;
+  color: #ffb300;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.8);
+}
 .title-center .btn.big {
   margin-top: 8px;
   font-size: 26px;
@@ -280,7 +288,107 @@ body,
   font-weight: 800;
 }
 
-/* ---- ルーム一覧（一覧のみ。新規作成は右下のボタンからモーダルで） ---- */
+/* ---- イントロダクション（世界観の紹介。SKIP で飛ばせる） ---- */
+.scr-intro {
+  justify-content: center;
+  align-items: center;
+}
+.intro-box {
+  width: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+  align-items: center;
+  text-align: center;
+}
+.intro-text {
+  font-size: clamp(17px, 2vw, 22px);
+  line-height: 2;
+  color: #e9ecf1;
+  min-height: 7em;
+}
+.intro-nav {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+.intro-dots {
+  display: flex;
+  gap: 8px;
+}
+.intro-dots i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3a4453;
+}
+.intro-dots i.on {
+  background: #ffb300;
+}
+
+/* ---- エリア（住所）の選択 / 新設 ---- */
+.rooms-grid {
+  display: grid;
+  grid-template-columns: 1fr 360px;
+  gap: 20px;
+  align-items: start;
+  width: min(1100px, 100%);
+  margin: 0 auto;
+}
+.address-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.address-panel .btn.big {
+  font-size: 18px;
+  padding: 14px 12px;
+  white-space: nowrap;
+}
+.address-or {
+  text-align: center;
+  font-size: 12px;
+  color: #6f7887;
+}
+.btn.big.accent {
+  background: #ff6fae;
+  color: #2a0a18;
+}
+.address-big {
+  font-size: 44px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  color: #ffb300;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+  padding: 8px 0 4px;
+}
+.create-details {
+  border: 1px solid #2d3542;
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+.create-details summary {
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  color: #d6dbe4;
+}
+.create-details summary small {
+  font-weight: 400;
+  color: #8a93a3;
+  margin-left: 6px;
+}
+.create-details[open] summary {
+  margin-bottom: 8px;
+}
+@media (max-width: 900px) {
+  .rooms-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .rooms-panel {
   max-width: 900px;
   width: 100%;
@@ -429,6 +537,7 @@ body,
   font-size: 22px;
   letter-spacing: 0.04em;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .room-members {
   font-size: 13px;
@@ -481,10 +590,10 @@ body,
   font-size: 22px;
 }
 .team-card.team-a .team-name {
-  color: #ff8d80;
+  color: #ff6fae;
 }
 .team-card.team-b .team-name {
-  color: #8fe0ff;
+  color: #4fb3ff;
 }
 .team-name small {
   font-size: 12px;
@@ -560,12 +669,7 @@ body,
   color: #8a93a3;
 }
 
-/* 着せ替え（中央） */
-.costume {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
+/* 変装のプレビュー（作戦会議・まんびきサイド） */
 .costume-slot {
   display: flex;
   justify-content: center;
@@ -579,61 +683,28 @@ body,
 .costume-preview canvas {
   display: block;
   width: 100%;
-  max-height: 340px;
+  max-height: 260px;
 }
-.palette {
-  display: grid;
-  grid-template-columns: repeat(6, 1fr);
-  gap: 8px;
-}
-.swatch {
-  position: relative;
-  height: 46px;
-  border: 3px solid transparent;
-  border-radius: 10px;
-  cursor: pointer;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: center;
-  gap: 2px;
-  padding: 2px;
-}
-.swatch:hover {
-  filter: brightness(1.15);
-}
-.swatch.selected {
-  border-color: #fff;
-  box-shadow: 0 0 0 2px #ffb300;
-}
-.swatch-tag {
-  font-size: 10px;
-  padding: 1px 5px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.7);
-  color: #fff;
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.swatch-tag.me {
-  background: #ffb300;
-  color: #222;
-  font-weight: bold;
-}
-.costume-wait {
-  min-height: 220px;
+
+/* 先攻の選択（ホストだけが押せる） */
+.first-pick {
   display: flex;
   align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
   justify-content: center;
-  text-align: center;
-  padding: 24px;
-  border: 1px dashed #3a4453;
-  border-radius: 12px;
-  color: #8a93a3;
-  font-size: 13px;
-  line-height: 1.8;
+  padding: 6px 0 90px;
+}
+.first-pick-label {
+  font-weight: 800;
+  color: #ffb300;
+}
+.seg-row {
+  display: flex;
+  gap: 6px;
+}
+.seg-row .seg:disabled {
+  cursor: default;
 }
 
 /* ステージ選択と開始（右） */
@@ -758,8 +829,8 @@ body,
   padding: 16px 56px;
 }
 
-/* 攻守交代の着せ替え・作戦会議 */
-.costume-phase {
+/* 作戦会議タイム（左: 残り時間・役割・変装 / 右: 値段付きの店内マップ） */
+.planning {
   display: grid;
   grid-template-columns: 340px 1fr;
   gap: 24px;
@@ -778,10 +849,51 @@ body,
   color: #ffb300;
   line-height: 1.1;
 }
+.planning-side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.planning-role {
+  display: flex;
+  flex-direction: column;
+  font-size: 26px;
+  font-weight: 900;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.planning-role small {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+}
+.planning-role.a small {
+  color: #ff6fae;
+}
+.planning-role.b small {
+  color: #4fb3ff;
+}
+.planning-map {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+}
+.strategy-map {
+  max-width: 100%;
+  overflow: auto;
+}
+.strategy-map canvas {
+  display: block;
+  border-radius: 10px;
+  max-width: 100%;
+  height: auto;
+}
 
 @media (max-width: 1000px) {
   .team-grid,
-  .costume-phase {
+  .planning {
     grid-template-columns: 1fr;
   }
 }
@@ -964,6 +1076,33 @@ body,
   font-size: 28px;
   white-space: nowrap;
 }
+/* 攻守それぞれのスタート画面（カウントダウンの数字の下に出す役割カード。上に積まれるバナーと重ねない） */
+.hud-start {
+  position: absolute;
+  top: 40%;
+  left: 50%;
+  transform: translate(-50%, 70%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 36px;
+  border-radius: 14px;
+  background: rgba(8, 10, 14, 0.7);
+  white-space: nowrap;
+  animation: doubt-pop 0.3s ease-out;
+}
+.hud-start-role {
+  font-size: clamp(28px, 4vw, 48px);
+  font-weight: 900;
+  color: #ffb300;
+  text-shadow: 0 4px 16px rgba(0, 0, 0, 0.7);
+}
+.hud-start-sub {
+  font-size: 16px;
+  color: #d6dbe4;
+  letter-spacing: 0.1em;
+}
 
 /* ---- ダウト成功演出 ---- */
 .doubt-overlay {
@@ -994,22 +1133,18 @@ body,
   }
 }
 
-/* ---- 終了画面（演出: 見出し → スコアのカウントアップとバー → 勝者の発表と紙吹雪） ---- */
+/* ---- 終了画面（ラウンド終了 / 最終結果の表 → セレモニー → ネクスト選択） ---- */
 .end-overlay {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(8, 10, 14, 0);
+  /* 背景はアニメーションにしない（非アクティブなタブではアニメーションが止まり、透けたままになるため） */
+  background: rgba(8, 10, 14, 0.88);
   pointer-events: auto;
   overflow: hidden;
-  animation: end-fade 0.6s ease-out forwards;
-}
-@keyframes end-fade {
-  to {
-    background: rgba(8, 10, 14, 0.88);
-  }
+  z-index: 7;
 }
 .end-panel {
   width: min(880px, 92vw);
@@ -1031,184 +1166,134 @@ body,
   opacity: 1;
   transform: none;
 }
-.end-scores {
-  width: 100%;
-  display: grid;
-  grid-template-columns: 1fr 64px 1fr;
-  align-items: center;
-  gap: 18px;
+/* 得点表: PINK vs BLUE / 1st ROUND … / TOTAL */
+.end-table {
+  width: min(560px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   opacity: 0;
   transition: opacity 0.4s;
 }
-.end-panel.s2 .end-scores {
+.end-panel.s2 .end-table {
   opacity: 1;
 }
-.end-team {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.end-team.a {
-  align-items: flex-end;
-  text-align: right;
-}
-.end-team.b {
-  align-items: flex-start;
-  text-align: left;
-}
-.end-team-name {
-  font-size: 18px;
-  font-weight: 800;
-}
-.end-team.a .end-team-name {
-  color: #ff7b6e;
-}
-.end-team.b .end-team-name {
-  color: #7fd4ff;
-}
-.end-num {
-  font-size: 64px;
+.end-head {
+  display: grid;
+  grid-template-columns: 1fr 120px 40px 120px;
+  align-items: center;
+  font-size: 26px;
   font-weight: 900;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
+  letter-spacing: 0.08em;
+  padding: 0 12px 6px;
 }
-.end-num small {
-  font-size: 22px;
-  font-weight: 700;
-  margin-left: 4px;
+.end-head .ha {
+  color: #ff6fae;
+  text-align: center;
+  grid-column: 2;
 }
-.end-bar {
-  width: 100%;
-  height: 14px;
-  border-radius: 7px;
-  background: rgba(255, 255, 255, 0.08);
-  overflow: hidden;
-  display: flex;
-}
-.end-team.a .end-bar {
-  justify-content: flex-end;
-}
-.end-bar i {
-  display: block;
-  height: 100%;
-  width: 0;
-  border-radius: 7px;
-  transition: width 1.4s cubic-bezier(0.2, 0.8, 0.2, 1);
-}
-.end-team.a .end-bar i {
-  background: linear-gradient(90deg, #ff9a8b, #e0453a);
-}
-.end-team.b .end-bar i {
-  background: linear-gradient(90deg, #4fc3f7, #8fe0ff);
+.end-head .hb {
+  color: #4fb3ff;
+  text-align: center;
+  grid-column: 4;
 }
 .end-vs {
-  font-size: 22px;
+  font-size: 16px;
   font-weight: 900;
   color: #6f7887;
-}
-.end-winner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  opacity: 0;
-  transform: scale(0.6);
-  transition: opacity 0.35s, transform 0.5s cubic-bezier(0.2, 1.4, 0.4, 1);
-}
-.end-panel.s3 .end-winner {
-  opacity: 1;
-  transform: none;
-}
-.end-winner h1 {
-  font-size: clamp(40px, 6vw, 72px);
-  font-weight: 900;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
-  text-shadow: 0 6px 30px rgba(0, 0, 0, 0.6);
-}
-.end-winner.a h1 {
-  color: #ff8d80;
-}
-.end-winner.b h1 {
-  color: #8fe0ff;
-}
-.end-winner.draw h1 {
-  color: #ffb300;
-}
-.end-reason {
-  font-size: 14px;
-  color: #b6bdc9;
-}
-.end-actions {
-  opacity: 0;
-  transition: opacity 0.4s;
-}
-.end-panel.s3 .end-actions {
-  opacity: 1;
-}
-.end-actions .btn {
-  background: #ffb300;
-  color: #1a1400;
-  font-weight: 800;
-  font-size: 18px;
-  padding: 14px 44px;
-}
-.end-team.lose {
-  opacity: 0.55;
-}
-.end-tally {
-  font-size: 20px;
-  color: #d6dbe4;
-  letter-spacing: 0.1em;
-}
-.end-tally b {
-  font-size: 40px;
-  font-weight: 900;
-  letter-spacing: 0;
-  margin: 0 4px;
-}
-.end-tally .ta {
-  color: #ff8d80;
-}
-.end-tally .tb {
-  color: #8fe0ff;
-}
-.end-tally small {
-  font-size: 13px;
-  color: #9aa3b2;
+  text-align: center;
 }
 .end-rows {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  width: min(420px, 100%);
-  opacity: 0;
-  transition: opacity 0.4s;
-}
-.end-panel.s2 .end-rows {
-  opacity: 1;
 }
 .end-row {
   display: grid;
-  grid-template-columns: 1fr auto 20px auto;
-  gap: 10px;
+  grid-template-columns: 1fr 120px 40px 120px;
   align-items: baseline;
-  font-size: 14px;
+  font-size: 18px;
   color: #b6bdc9;
-  padding: 4px 12px;
+  padding: 8px 12px;
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.05);
+}
+.end-row-name {
+  text-align: left;
+  letter-spacing: 0.1em;
+  font-weight: 700;
 }
 .end-row b {
   font-variant-numeric: tabular-nums;
   color: #d6dbe4;
+  font-size: 26px;
+  font-weight: 900;
+  text-align: center;
+}
+.end-row .ra {
+  grid-column: 2;
+}
+.end-row .rb {
+  grid-column: 4;
+}
+.end-row.todo {
+  opacity: 0.45;
+}
+.end-row.now {
+  background: rgba(255, 179, 0, 0.12);
+  outline: 1px solid rgba(255, 179, 0, 0.4);
 }
 .end-row.a .ra {
-  color: #ff8d80;
+  color: #ff6fae;
 }
 .end-row.b .rb {
-  color: #8fe0ff;
+  color: #4fb3ff;
+}
+.end-row.total {
+  margin-top: 6px;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 20px;
+}
+.end-row.total b {
+  font-size: 32px;
+  color: #fff;
+}
+.end-tally {
+  font-size: 16px;
+  color: #d6dbe4;
+  letter-spacing: 0.1em;
+  padding-top: 6px;
+}
+.end-tally b {
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: 0;
+  margin: 0 4px;
+}
+.end-tally .ta {
+  color: #ff6fae;
+}
+.end-tally .tb {
+  color: #4fb3ff;
+}
+.end-tally small {
+  font-size: 13px;
+  color: #9aa3b2;
+}
+.end-foot {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  opacity: 0;
+  transition: opacity 0.4s;
+}
+.end-panel.s3 .end-foot {
+  opacity: 1;
+}
+.end-reason {
+  font-size: 14px;
+  color: #b6bdc9;
 }
 .end-next {
   font-size: 15px;
@@ -1217,8 +1302,138 @@ body,
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.08);
 }
-.end-team.win .end-num {
+.end-next-btn {
+  background: #ffb300;
+  color: #1a1400;
+  font-weight: 800;
+  font-size: 18px;
+  padding: 14px 44px;
+}
+
+/* セレモニー: 勝ったチームが大きく喜び、負けたチームは小さく項垂れる */
+.cer-title {
+  font-size: clamp(36px, 6vw, 72px);
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
   color: #fff;
+  text-shadow: 0 6px 30px rgba(0, 0, 0, 0.6);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.35s, transform 0.5s cubic-bezier(0.2, 1.4, 0.4, 1);
+}
+.end-panel.s3 .cer-title {
+  opacity: 1;
+  transform: none;
+}
+.cer-title.a .cer-quote {
+  color: #ff6fae;
+}
+.cer-title.b .cer-quote {
+  color: #4fb3ff;
+}
+.cer-title.draw {
+  color: #ffb300;
+}
+.cer-teams {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 60px;
+  width: 100%;
+}
+.cer-team {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  transition: transform 0.6s cubic-bezier(0.2, 1.2, 0.4, 1), opacity 0.6s;
+}
+.cer-face {
+  font-size: 72px;
+  line-height: 1;
+}
+.cer-team.win .cer-face {
+  font-size: 128px;
+  animation: cer-bounce 0.9s ease-in-out infinite alternate;
+}
+.cer-team.lose {
+  opacity: 0.5;
+  transform: scale(0.75) translateY(20px);
+}
+.cer-team.lose .cer-face {
+  animation: cer-droop 2.4s ease-in-out infinite alternate;
+}
+@keyframes cer-bounce {
+  from {
+    transform: translateY(0) rotate(-6deg);
+  }
+  to {
+    transform: translateY(-18px) rotate(6deg);
+  }
+}
+@keyframes cer-droop {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(8px);
+  }
+}
+.cer-name {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+.cer-team.a .cer-name {
+  color: #ff6fae;
+}
+.cer-team.b .cer-name {
+  color: #4fb3ff;
+}
+.cer-score {
+  font-size: 56px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #fff;
+}
+.cer-team.win .cer-score {
+  font-size: 80px;
+}
+.cer-score small {
+  font-size: 20px;
+  margin-left: 4px;
+}
+
+/* ネクスト選択（もう一度 / 別のエリア / 止める）とゲーム中止警告 */
+.next-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(420px, 100%);
+}
+.next-choice {
+  font-size: 20px;
+  font-weight: 800;
+  padding: 18px 24px;
+  background: rgba(255, 255, 255, 0.1);
+}
+.next-choice:hover {
+  background: #ffb300;
+  color: #1a1400;
+}
+.next-choice.quit {
+  font-size: 16px;
+  font-weight: 600;
+  color: #b6bdc9;
+}
+.quit-modal {
+  text-align: center;
+}
+.quit-modal p {
+  color: #b6bdc9;
+  padding: 10px 0 4px;
 }
 /* 紙吹雪 */
 .confetti {
@@ -1240,19 +1455,22 @@ body,
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .end-bar i,
-  .end-winner,
+  .cer-title,
+  .cer-team,
   .end-title,
-  .end-scores,
-  .end-actions {
+  .end-table,
+  .end-foot {
     transition: none;
+  }
+  .cer-face {
+    animation: none !important;
   }
   .confetti {
     display: none;
   }
 }
 
-/* ---- CCTV（猫チーム） ---- */
+/* ---- CCTV（監視サイド） ---- */
 .cctv-overlay {
   position: absolute;
   inset: 0;
@@ -1332,7 +1550,7 @@ body,
 .cctv-cell.offline .cctv-label {
   color: #888;
 }
-/* ---- ミニマップ（ネズミ・左下常時表示） ---- */
+/* ---- ミニマップ（まんびきサイド・左下常時表示） ---- */
 .mini-map {
   position: absolute;
   left: 16px;
@@ -1349,7 +1567,7 @@ body,
   border-radius: 6px;
 }
 
-/* ゲームパッドの照準カーソル（猫チーム。位置は CctvView が transform で動かす）。カメラマップ・HUDより手前 */
+/* ゲームパッドの照準カーソル（監視サイド。位置は CctvView が transform で動かす）。カメラマップ・HUDより手前 */
 .pad-aim {
   position: absolute;
   left: 0;
@@ -1376,7 +1594,7 @@ body,
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
 }
 
-/* ---- カメラ操作マップ（猫チーム・画面の一番下に常時表示。カメラ番号クリックでON/OFF） ---- */
+/* ---- カメラ操作マップ（監視サイド・画面の一番下に常時表示。カメラ番号クリックでON/OFF） ---- */
 .cam-map {
   position: absolute;
   left: 50%;

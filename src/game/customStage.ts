@@ -420,7 +420,7 @@ export function validateStage(data: CustomStageData): StageCheck {
 
   if (data.shelves.length === 0) warnings.push('棚がありません（盗む商品がありません）');
   else if (spotCells(data).length === 0) warnings.push('盗める棚がありません（棚の前に通路がありません）');
-  if (data.cams.length === 0) warnings.push('カメラがありません（猫が店内を見られません）');
+  if (data.cams.length === 0) warnings.push('カメラがありません（監視サイドが店内を見られません）');
 
   const tall = data.shelves.filter((s) => !s.low);
   data.cams.forEach((c, i) => {

@@ -35,6 +35,8 @@ export interface ShelfDraw {
   /** 料金帯の色（config.PRICE_TIERS） */
   color: number;
   label: string;
+  /** この棚に並んでいる商品（作戦会議のマップに名前とポイントを出す） */
+  item: Item;
 }
 
 /** カメラマップ描画用のスロープ情報 */
@@ -100,15 +102,15 @@ export interface World {
 
 /**
  * 2F以上の静的メッシュ（床板・棚・手すり・カメラ）が属するレイヤ。
- * 1Fにいるネズミの追従カメラでは上階の床板が視界を塞ぐため、このレイヤを外して描画する。
+ * 1Fにいるまんびきサイドの追従カメラでは上階の床板が視界を塞ぐため、このレイヤを外して描画する。
  * CCTVカメラ・一人称カメラは全レイヤを描画する
  */
 export const UPPER_LAYER = 1;
 /** 動くもの（NPC・他プレイヤー）をどの高さから UPPER_LAYER に入れるか */
 export const UPPER_LAYER_MIN_Y = 2.0;
 /**
- * プレイヤー名ラベルのレイヤ。ネズミ役（泥棒チーム）のクライアントの追従・一人称カメラだけが描画し、
- * 監視カメラ・観戦には映さない（名前で仲間を見分ける＝猫からは見分けがつかない）
+ * プレイヤー名ラベルのレイヤ。まんびきサイドのクライアントの追従・一人称カメラだけが描画し、
+ * 監視カメラ・観戦には映さない（名前で仲間を見分ける＝監視サイドからは見分けがつかない）
  */
 export const LABEL_LAYER = 2;
 /** ネズミのカプセルの足元から中心までの高さ（makeCapsule の position.y） */
@@ -310,7 +312,7 @@ export function buildWorld(scene: THREE.Scene, seed: number, stage: StageDef): W
       const rect: Rect = { minX: s.minX, maxX: s.maxX, minZ: s.minZ, maxZ: s.maxZ };
       obstacles.push(rect);
       if (s.h >= 1.8) occluders.push(rect); // 平台は低いのでカメラの視線を遮らない
-      shelfDraws.push({ rect, color, label: s.label });
+      shelfDraws.push({ rect, color, label: s.label, item });
 
       // 商品の飾り（面に沿って小箱を並べる）と盗みスポット（約2.8間隔）
       const SPOT_OFF = 0.7;

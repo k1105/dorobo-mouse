@@ -80,12 +80,12 @@ const hex = (c: number) => `#${c.toString(16).padStart(6, '0')}`;
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 const snapHalf = (v: number) => Math.round(v * 2) / 2;
 
-/** 料金帯の値段の範囲（例: 300〜499円） */
+/** 料金帯のポイントの範囲（例: 300〜499pt） */
 function tierRange(i: number): string {
   const min = PRICE_TIERS[i].min;
-  if (i === 0) return `${min}円〜`;
+  if (i === 0) return `${min}pt〜`;
   const upper = PRICE_TIERS[i - 1].min - 1;
-  return min <= 0 ? `〜${upper}円` : `${min}〜${upper}円`;
+  return min <= 0 ? `〜${upper}pt` : `${min}〜${upper}pt`;
 }
 
 /**
@@ -479,7 +479,7 @@ export class StageEditor {
     if (sel?.kind === 'spawn') {
       el.innerHTML = `
         <h3 class="section-title">スポーン地点 ${sel.i + 1}</h3>
-        <p class="lobby-note dim">ネズミ陣営の${sel.i + 1}人目がラウンド開始時に立つ場所。ドラッグで動かせる</p>
+        <p class="lobby-note dim">まんびきサイドの${sel.i + 1}人目がターン開始時に立つ場所。ドラッグで動かせる</p>
       `;
       return;
     }
@@ -559,10 +559,10 @@ export class StageEditor {
         blocked ? '⛔ の項目を直すと遊べるようになります' : '✅ 遊べます。ルーム作成のステージ選択に出ます'
       }</p>
       <div class="ed-test">
-        <button class="ed-play" data-test="mouse" ${blocked ? 'disabled' : ''}>▶ ネズミで歩く</button>
-        <button class="ed-play" data-test="cat" ${blocked ? 'disabled' : ''}>▶ 猫カメラで見る</button>
+        <button class="ed-play" data-test="mouse" ${blocked ? 'disabled' : ''}>▶ まんびきサイドで歩く</button>
+        <button class="ed-play" data-test="cat" ${blocked ? 'disabled' : ''}>▶ 監視サイドで見る</button>
       </div>
-      <p class="lobby-note dim">テストプレイは1人用（NPCあり。${CONFIG.roundTimeSec}秒のラウンドが終わると自動でやり直し）。対戦で使うときは、タイトル →「スタート」→ ルームを新規作成 でこのステージを選ぶ</p>
+      <p class="lobby-note dim">テストプレイは1人用（NPCあり。${CONFIG.roundTimeSec}秒のターンが終わると自動でやり直し）。対戦で使うときは、タイトル → PRESS TO START → 「新たな住所をゲットする！」の くわしい設定 でこのステージを選ぶ</p>
     `;
     this.root.querySelectorAll<HTMLButtonElement>('.ed-play').forEach((b) => {
       b.onclick = () => this.startTest(b.dataset.test as TestRole);
