@@ -128,6 +128,8 @@ export interface PhaseState {
   reason?: string;
   scoreA?: number;
   scoreB?: number;
+  /** 移動ログのID（logIndex/{logId}・logs/{logId}）。START 時に発行し、試合中持ち回る。無ければ記録しない */
+  logId?: string;
 }
 
 /**
@@ -172,3 +174,71 @@ export type GameEvent =
   | ({ type: 'escape'; value: number } & EventBase)
   | ({ type: 'miss'; npcIdx: number } & EventBase)
   | ({ type: 'caught'; mouseId: string } & EventBase);
+
+// ---- 移動ログ（後から再生するための記録） ----
+// 軽い情報（試合・ターンのメタ）は logIndex/{logId}、重い情報（軌跡・イベント・カメラ）は logs/{logId}/{turnKey} に分けて、
+// ログモニターが一覧表示のときに軌跡まで読み込まなくて済むようにしている
+
+/** ログに残すプレイヤー情報（ターン開始時点のスナップショット。color はそのターンの変装） */
+export interface LogPlayer {
+  name: string;
+  role: Role;
+  color?: number;
+}
+
+/** 1ターンの情報（logIndex/{logId}/turns/{turnKey}/info。ターン開始時にホストが書く） */
+export interface LogTurnInfo {
+  set: number;
+  round: Round;
+  stage: string;
+  seed: number;
+  /** ターン開始時刻（カウントダウン後。軌跡の t はここからのミリ秒） */
+  startAt: number;
+  firstMice: Team;
+  players: Record<string, LogPlayer>;
+}
+
+/** ターン終了の情報（logIndex/{logId}/turns/{turnKey}/end。ターンを終わらせたクライアントが書く） */
+export interface LogTurnEnd {
+  at: number;
+  reason: string;
+  scoreA: number;
+  scoreB: number;
+}
+
+/** 試合のメタ情報（logIndex/{logId}。START 時にホストが書き、turns はターンごとに増える） */
+export interface LogMeta {
+  room: string;
+  createdAt: number;
+  sets: number;
+  stages: string[];
+  firstMice: Team;
+  /** 使った自作ステージのデータ（ID → CustomStageData）。再生時に登録してから getStage で引く */
+  custom?: Record<string, unknown>;
+  turns?: Record<string, { info?: LogTurnInfo; end?: LogTurnEnd }>;
+}
+
+/** 監視サイドのカメラ切替の記録（t はターン開始からのミリ秒） */
+export interface LogCamEntry {
+  t: number;
+  ids: number[];
+}
+
+/** 1ターンの重いログ（logs/{logId}/{turnKey}）。tracks の各チャンクは TRACK_STRIDE 個ずつの数値列 */
+export interface TurnLog {
+  tracks?: Record<string, Record<string, number[]>>;
+  events?: Record<string, GameEvent>;
+  cams?: Record<string, Record<string, LogCamEntry>>;
+}
+
+/** 軌跡1サンプルの要素数: t(ms), x, z, ry, floor, flags */
+export const TRACK_STRIDE = 6;
+/** flags: 退場して姿を消している */
+export const TRACK_HIDDEN = 1;
+/** flags: 盗みモーション中 */
+export const TRACK_SWAY = 2;
+
+/** ターンのログのキー（例: s1r2 = 1st ROUND 第2ターン） */
+export function logTurnKey(set: number, round: number): string {
+  return `s${set}r${round}`;
+}

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { NetAdapter } from '../net';
-import type { FirstPick, MatchConfig, PhaseState, PlayerInfo, Role, Team } from '../types';
+import type { FirstPick, LogMeta, MatchConfig, PhaseState, PlayerInfo, Role, Team } from '../types';
 import { isMouseInRound, isStalePhase, rolesOfTeam, TEAM_LABELS, TEAM_NAMES, teamOf } from '../types';
 import { AVATAR_PALETTE, CONFIG } from '../config';
 import { DEFAULT_STAGE_ID, getStage, STAGES } from '../game/stages';
@@ -80,6 +80,10 @@ export class Lobby {
     null;
   /** タイトルの「ステージエディタ」が押されたときに呼ばれる（main.tsがエディタを開く） */
   onOpenEditor: (() => void) | null = null;
+  /** タイトルの「ログモニター」が押されたときに呼ばれる（main.tsがモニターを開く） */
+  onOpenMonitor: (() => void) | null = null;
+  /** 部屋の match.custom（自作ステージのデータ）。START 時に移動ログのメタ情報へ写す */
+  private matchCustom: Record<string, unknown> = {};
   private unsubs: (() => void)[] = [];
   private roomIndex: RoomIndex = {};
   private unsubRoomIndex: (() => void) | null = null;
@@ -148,7 +152,10 @@ export class Lobby {
           <h1 class="title-logo">まんびきチュー</h1>
           <p class="title-sub">~SUPER TINY WAR~</p>
           <button class="btn big" id="btn-title-start">PRESS TO START</button>
-          <button class="btn title-editor" id="btn-title-editor">🛠 ステージエディタ</button>
+          <div class="title-tools">
+            <button class="btn title-editor" id="btn-title-editor">🛠 ステージエディタ</button>
+            <button class="btn title-editor" id="btn-title-monitor">📼 ログモニター</button>
+          </div>
         </div>
         <span class="mode-badge title-mode">${this.modeLabel()}</span>
       </div>
@@ -160,6 +167,7 @@ export class Lobby {
       this.go('intro');
     };
     this.root.querySelector<HTMLButtonElement>('#btn-title-editor')!.onclick = () => this.onOpenEditor?.();
+    this.root.querySelector<HTMLButtonElement>('#btn-title-monitor')!.onclick = () => this.onOpenMonitor?.();
   }
 
   private destroyBackdrop(): void {
@@ -478,7 +486,8 @@ export class Lobby {
       this.net.subscribe(`rooms/${room}/match`, (val) => {
         const m = val as Partial<MatchConfig> | null;
         // 自作ステージを先に登録する（以降 getStage でIDから引ける）
-        for (const [id, raw] of Object.entries(m?.custom ?? {})) registerCustomStage(id, raw);
+        this.matchCustom = m?.custom ?? {};
+        for (const [id, raw] of Object.entries(this.matchCustom)) registerCustomStage(id, raw);
         const stages = Array.isArray(m?.stages) ? m.stages.map((id) => getStage(id).id) : [];
         const sets = Math.max(1, Math.floor(Number(m?.sets) || stages.length || 1));
         while (stages.length < sets) stages.push(stages[stages.length - 1] ?? DEFAULT_STAGE_ID);
@@ -724,6 +733,20 @@ export class Lobby {
       this.net.remove(`rooms/${this.room}/events`);
       this.net.remove(`rooms/${this.room}/pos`);
       this.net.remove(`rooms/${this.room}/cams`);
+      // 移動ログ（ログモニターで再生する）。試合ごとにIDを発行してメタ情報を書き、phase に持ち回る
+      const logId = `${this.room}_${Date.now()}`;
+      const meta: LogMeta = {
+        room: this.room!,
+        createdAt: Date.now(),
+        sets: this.match.sets,
+        stages: this.match.stages,
+        firstMice,
+      };
+      const custom = Object.fromEntries(
+        Object.entries(this.matchCustom).filter(([id]) => this.match.stages.includes(id)),
+      );
+      if (Object.keys(custom).length > 0) meta.custom = custom;
+      this.net.set(`logIndex/${logId}`, meta);
       this.net.set(`rooms/${this.room}/phase`, {
         phase: 'planning',
         round: 1,
@@ -736,6 +759,7 @@ export class Lobby {
         until: Date.now() + CONFIG.planningSec * 1000,
         stage: this.match.stages[0],
         note: this.match.sets > 1 ? roundLabel(1) : '',
+        logId,
       } satisfies PhaseState);
     });
     this.destroyPreview();

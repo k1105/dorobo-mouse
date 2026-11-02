@@ -1,8 +1,9 @@
 import * as THREE from 'three';
 import { AVATAR_PALETTE, CONFIG, COLORS } from '../config';
 import type { NetAdapter } from '../net';
-import type { GameEvent, PhaseState, PlayerInfo, PosMsg, Role, Round, SetResult, Team } from '../types';
-import { isMouseInRound, miceTeamOf, setsWon, teamOf, TEAM_LABELS } from '../types';
+import type { GameEvent, LogPlayer, PhaseState, PlayerInfo, PosMsg, Role, Round, SetResult, Team } from '../types';
+import { isMouseInRound, logTurnKey, miceTeamOf, setsWon, teamOf, TEAM_LABELS } from '../types';
+import { TurnLogger } from './logger';
 import { pt, roundLabel, sideLabel, SIDE_MICE, turnLabel } from '../ui/text';
 import { mulberry32 } from './rng';
 import { Controls } from './controls';
@@ -143,6 +144,9 @@ export class Game {
   private seenEvents = new Set<string>();
   private eventsInitialized = false;
 
+  /** 移動ログの書き込み（phase.logId があるときだけ。エディタのテストプレイでは無い） */
+  private logger: TurnLogger | null = null;
+
   private raf = 0;
   private lastFrame = performance.now();
   private lastPosSend = 0;
@@ -170,6 +174,27 @@ export class Game {
     this.startAt = phase.startAt ?? Date.now();
     this.seed = phase.seed ?? 1;
     this.stage = getStage(phase.stage);
+    // 移動ログ。ターンの情報（ステージ・seed・開始時刻・参加者の変装）はホストが書く
+    if (phase.logId) {
+      this.logger = new TurnLogger(net, phase.logId, logTurnKey(this.set, this.round), net.clientId);
+      if (this.isHost()) {
+        const logPlayers: Record<string, LogPlayer> = {};
+        for (const [pid, p] of Object.entries(players)) {
+          // Firebase は undefined を含む値を拒否するので color は有るときだけ入れる
+          logPlayers[pid] =
+            p.color === undefined ? { name: p.name, role: p.role } : { name: p.name, role: p.role, color: p.color };
+        }
+        this.logger.writeInfo({
+          set: this.set,
+          round: this.round,
+          stage: this.stage.id,
+          seed: this.seed,
+          startAt: this.startAt,
+          firstMice: this.firstMice,
+          players: logPlayers,
+        });
+      }
+    }
     // ダウトのレイキャストと追従カメラは上階のレイヤも対象にする（追従カメラは状況に応じて外す）。
     // 名前ラベルはまんびきサイドのクライアントだけが見える（監視サイド・観戦には映さない）
     this.raycaster.layers.enableAll();
@@ -615,6 +640,8 @@ export class Game {
       hidden: true,
       sway: false,
     } satisfies PosMsg);
+    this.logger?.sample(this.gameTime(), this.base.x, this.base.z, this.myMesh.rotation.y, this.base.floor, true, false);
+    this.logger?.flush();
     for (const mesh of [this.myMesh, this.selfRing]) {
       if (!mesh) continue;
       this.scene.remove(mesh);
@@ -639,9 +666,15 @@ export class Game {
   }
 
   private publishCams(): void {
-    this.net.set(`rooms/${this.room}/cams/${this.net.clientId}`, {
-      ids: this.cctv?.onlineIds() ?? [],
-    });
+    const ids = this.cctv?.onlineIds() ?? [];
+    this.net.set(`rooms/${this.room}/cams/${this.net.clientId}`, { ids });
+    this.logger?.cams(this.gameTime(), ids);
+  }
+
+  /** イベントを部屋に送る（ロビーに戻ると消える）と同時に、移動ログにも残す */
+  private emitEvent(ev: GameEvent): void {
+    this.net.push(`rooms/${this.room}/events`, ev);
+    this.logger?.event(ev);
   }
 
   /**
@@ -731,6 +764,7 @@ export class Game {
     if (this.endSent) return;
     if (this.phase.phase !== 'playing' || (this.phase.round ?? 1) !== this.round) return;
     this.endSent = true;
+    this.logger?.writeEnd({ at: Date.now(), reason: reasonText, scoreA: this.scoreA, scoreB: this.scoreB });
     // セット構成は phase から持ち回る（Firebase は undefined を拒否するので未定義は入れない）
     const carry: PhaseState = {
       phase: 'playing',
@@ -741,6 +775,7 @@ export class Game {
     };
     if (this.phase.stages) carry.stages = this.phase.stages;
     if (this.phase.results) carry.results = this.phase.results;
+    if (this.phase.logId) carry.logId = this.phase.logId;
     if (this.round === 1) {
       // 攻守交代: 第2ターンの前に作戦会議タイムを挟む（第2ターンの開始は main.ts が until で書く）。
       // 商品配置の seed はここで決めて、作戦会議のマップに値段を出せるようにする
@@ -926,7 +961,7 @@ export class Game {
     while (obj.parent && !targets.includes(obj)) obj = obj.parent;
     for (const [pid, r] of this.remotes) {
       if (r.mesh === obj) {
-        this.net.push(`rooms/${this.room}/events`, {
+        this.emitEvent({
           type: 'caught',
           by: this.net.clientId,
           mouseId: pid,
@@ -940,7 +975,7 @@ export class Game {
     }
     const npcIdx = this.npcMeshes.indexOf(obj as THREE.Mesh);
     if (npcIdx >= 0) {
-      this.net.push(`rooms/${this.room}/events`, {
+      this.emitEvent({
         type: 'miss',
         by: this.net.clientId,
         npcIdx,
@@ -1037,6 +1072,7 @@ export class Game {
           hidden: false,
           sway: stealing,
         } satisfies PosMsg);
+        this.logger?.sample(t, this.base.x, this.base.z, this.myMesh.rotation.y, this.base.floor, false, stealing);
       }
     }
     if (this.myMesh) {
@@ -1108,7 +1144,7 @@ export class Game {
           if (p >= 1) {
             const spotIdx = this.stealSpot.idx;
             this.cancelSteal();
-            this.net.push(`rooms/${this.room}/events`, {
+            this.emitEvent({
               type: 'steal',
               by: this.net.clientId,
               spotIdx,
@@ -1129,7 +1165,7 @@ export class Game {
         const value = this.myCarryingValue;
         this.myCarrying = 0;
         this.myCarryingValue = 0;
-        this.net.push(`rooms/${this.room}/events`, {
+        this.emitEvent({
           type: 'escape',
           by: this.net.clientId,
           value,
@@ -1268,6 +1304,8 @@ export class Game {
     this.disposed = true;
     cancelAnimationFrame(this.raf);
     for (const u of this.unsubs) u();
+    this.logger?.dispose();
+    this.logger = null;
     // 攻守交代・ロビー復帰時に自分のカメラ接続状態を消す（次のターンは新しい監視サイドが書く）
     if (this.amCat) this.net.remove(`rooms/${this.room}/cams/${this.net.clientId}`);
     this.controls.dispose();

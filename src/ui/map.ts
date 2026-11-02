@@ -15,7 +15,7 @@ const MAX_H_RATIO = 0.75;
 const MAX_MARK_SCALE = 1.5;
 
 /** 店内レイアウトと各カメラの視野を俯瞰で描く。監視サイドのカメラマップ・まんびきサイドのミニマップ・作戦会議のマップで共有する */
-interface MapCanvas {
+export interface MapCanvas {
   canvas: HTMLCanvasElement;
   /** ワールド座標 → キャンバス座標（CSSピクセル）。floor はどのフロアの枠に描くか */
   tx: (x: number, floor: number) => number;
@@ -25,7 +25,7 @@ interface MapCanvas {
 }
 
 /** フロア数に応じたマップの表示幅。2フロアなら1フロアの1.6倍程度に抑える */
-function widthFor(perFloor: number, floors: number): number {
+export function widthFor(perFloor: number, floors: number): number {
   return Math.round(perFloor * (1 + (floors - 1) * 0.6));
 }
 
@@ -53,7 +53,7 @@ const STRATEGY_W = 720;
  * 誰もオンにしていないカメラは薄い輪郭のみにする（監視サイドの操作用）。
  * prices を付けると棚に商品名とポイントも描く（作戦会議用）。
  */
-function drawMap(
+export function drawMap(
   canvas: HTMLCanvasElement,
   data: MapData,
   maxW: number,

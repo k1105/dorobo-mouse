@@ -2,6 +2,7 @@ import { createNet } from './net';
 import { Game } from './game/game';
 import { Lobby } from './ui/lobby';
 import { StageEditor } from './ui/editor';
+import { LogMonitor } from './ui/monitor';
 import { PadNav } from './ui/padnav';
 import { CONFIG } from './config';
 import { isStalePhase, type PhaseState } from './types';
@@ -32,6 +33,18 @@ async function boot(): Promise<void> {
     editor = new StageEditor(app, () => {
       editor?.dispose();
       editor = null;
+      lobby.show();
+    });
+  };
+
+  // ログモニター（タイトル画面から開く。試合の移動ログを俯瞰マップで再生する。閉じるとタイトルに戻る）
+  let monitor: LogMonitor | null = null;
+  lobby.onOpenMonitor = () => {
+    if (monitor) return;
+    lobby.hide();
+    monitor = new LogMonitor(app, net, () => {
+      monitor?.dispose();
+      monitor = null;
       lobby.show();
     });
   };
@@ -93,6 +106,7 @@ async function boot(): Promise<void> {
     if (phase.stages) carry.stages = phase.stages;
     if (phase.results) carry.results = phase.results;
     if (phase.firstMice) carry.firstMice = phase.firstMice;
+    if (phase.logId) carry.logId = phase.logId;
     if (phase.phase === 'planning') {
       const round = phase.round ?? 1;
       const lead = CONFIG.introSec + CONFIG.countdownSec;
