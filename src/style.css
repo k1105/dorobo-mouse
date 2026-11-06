@@ -383,6 +383,32 @@ body,
 .create-details[open] summary {
   margin-bottom: 8px;
 }
+/* ロビーの「くわしい設定」（ラウンド数とステージ。ホストだけが変更できる）。見出しのボタンで開閉する */
+.room-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.settings-toggle {
+  background: none;
+  border: none;
+  padding: 2px 0;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  color: #d6dbe4;
+}
+.settings-toggle small {
+  font-weight: 400;
+  color: #8a93a3;
+  margin-left: 6px;
+}
+.room-settings .seg:disabled,
+.room-settings .stage-pick:disabled {
+  cursor: default;
+}
 @media (max-width: 900px) {
   .rooms-grid {
     grid-template-columns: 1fr;
@@ -571,6 +597,8 @@ body,
   display: flex;
   flex-direction: column;
   gap: 16px;
+  /* 画面下に固定したフッター（START）に隠れないための余白 */
+  padding-bottom: 90px;
 }
 .team-grid {
   display: grid;
@@ -693,7 +721,7 @@ body,
   gap: 14px;
   flex-wrap: wrap;
   justify-content: center;
-  padding: 6px 0 90px;
+  padding: 6px 0;
 }
 .first-pick-label {
   font-weight: 800;

@@ -74,7 +74,7 @@ export interface SetResult {
   scoreB: number;
 }
 
-/** ルーム作成時にホストが決める試合構成 */
+/** 試合構成。エリアに入ったあと、ホストがロビーの「くわしい設定」で決める（ホスト以外は書かない） */
 export interface MatchConfig {
   /** セット数（1セット = 第1ターン＋第2ターンの攻守交代1回） */
   sets: number;
@@ -82,7 +82,7 @@ export interface MatchConfig {
   stages: string[];
   /**
    * stages で使うステージエディタ製ステージのデータ（ID → game/customStage.ts の CustomStageData）。
-   * ルーム作成者のブラウザにしか無いので、ルームに書いて全員に配る
+   * ホストのブラウザにしか無いので、ルームに書いて全員に配る
    */
   custom?: Record<string, unknown>;
 }

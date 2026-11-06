@@ -72,7 +72,7 @@ export class Lobby {
   room: string | null = null;
   players: Record<string, PlayerInfo> = {};
   phase: PhaseState = { phase: 'lobby' };
-  /** 試合構成（セット数とセットごとのステージ。rooms/{room}/match。エリア作成時にホストが決める） */
+  /** 試合構成（セット数とセットごとのステージ。rooms/{room}/match。エリアに入ったあと、ホストがロビーの「くわしい設定」で決める） */
   match: MatchConfig = { sets: 1, stages: [DEFAULT_STAGE_ID] };
   /** 先攻（第1ターンにまんびきするチーム。rooms/{room}/first。ホストが選ぶ） */
   first: FirstPick = 'random';
@@ -95,12 +95,12 @@ export class Lobby {
   /** 変装の色を決めたターン（`${set}-${round}`）。同じターンで2回決めない */
   private disguisedFor = '';
   private timerId = 0;
-  /** エリア作成モーダルの入力（セット数とセットごとのステージ） */
-  private createSets = 1;
-  private createStages: string[] = [DEFAULT_STAGE_ID];
+  /** エリア作成モーダルで表示中の住所 */
   private createCode = '';
-  /** エディタで作った自作ステージ（遊べるものだけ） */
+  /** エディタで作った自作ステージ（遊べるものだけ）。エリアに入るときに読み込む */
   private customStages: CustomStageData[] = [];
+  /** ロビーの「くわしい設定」（ラウンド数とステージ）を開いているか。描き直しても保つ */
+  private settingsOpen = false;
   /** match（試合構成）を受信済みか。受信前にゲームを作ると自作ステージが引けないので待つ */
   private matchLoaded = false;
 
@@ -256,10 +256,6 @@ export class Lobby {
 
   private renderRooms(): void {
     this.destroyPreview();
-    // エディタで作り直されている・消されていることがあるので、表示のたびに読み直す
-    this.customStages = loadStages().filter((s) => validateStage(s).errors.length === 0);
-    const known = new Set([...STAGES, ...BUNDLED_STAGES, ...this.customStages].map((s) => s.id));
-    this.createStages = this.createStages.map((id) => (known.has(id) ? id : DEFAULT_STAGE_ID));
     this.root.innerHTML = `
       <div class="scr">
         <div class="scr-head">
@@ -285,19 +281,7 @@ export class Lobby {
             <h2>新しいエリア</h2>
             <p class="lobby-note dim">この住所を仲間に伝えてください</p>
             <div class="address-big" id="create-code"></div>
-            <details class="create-details">
-              <summary>くわしい設定 <small>ラウンド数とステージ</small></summary>
-              <h3 class="section-title">ラウンド数 <small>1ラウンド = 第1ターン＋第2ターン（攻守交代）</small></h3>
-              <div class="set-options">${CONFIG.setOptions
-                .map(
-                  (n) =>
-                    `<button class="seg ${n === this.createSets ? 'selected' : ''}" data-sets="${n}">${n}</button>`,
-                )
-                .join('')}</div>
-              <h3 class="section-title">ラウンドごとのステージ</h3>
-              <div class="set-stages" id="set-stages">${this.setStagesHtml()}</div>
-              <p class="lobby-note dim">🛠 は自作ステージ。タイトル画面の「ステージエディタ」で作ったものがここに出ます</p>
-            </details>
+            <p class="lobby-note dim">ラウンド数とステージは、エリアに入ったあとホストが「くわしい設定」で決めます</p>
             <div class="btn-row modal-actions">
               <button class="btn" id="btn-cancel-create" data-pad-back>やめる</button>
               <button class="btn big" id="btn-create">エリアを作って入る</button>
@@ -337,46 +321,12 @@ export class Lobby {
     modal.onclick = (e) => {
       if (e.target === modal) closeModal();
     };
-    const setStages = this.root.querySelector<HTMLDivElement>('#set-stages')!;
-    const bindStageRows = () => {
-      setStages.querySelectorAll<HTMLButtonElement>('.stage-pick').forEach((b) => {
-        b.onclick = () => {
-          const i = Number(b.dataset.set);
-          this.createStages[i] = b.dataset.stage ?? DEFAULT_STAGE_ID;
-          setStages.innerHTML = this.setStagesHtml();
-          bindStageRows();
-        };
-      });
-    };
-    bindStageRows();
-    this.root.querySelectorAll<HTMLButtonElement>('.seg').forEach((b) => {
-      b.onclick = () => {
-        this.createSets = Number(b.dataset.sets);
-        // 増えた分は直前のラウンドと同じステージで埋める
-        while (this.createStages.length < this.createSets) {
-          this.createStages.push(this.createStages[this.createStages.length - 1] ?? DEFAULT_STAGE_ID);
-        }
-        this.createStages.length = this.createSets;
-        this.root.querySelectorAll<HTMLButtonElement>('.seg').forEach((c) => {
-          c.classList.toggle('selected', c === b);
-        });
-        setStages.innerHTML = this.setStagesHtml();
-        bindStageRows();
-      };
-    });
     const create = () => {
       const code = this.createCode;
       if (!code) return;
-      // モーダルを開いている間に誰かが同じ住所を開いていたら参加のみ。新設なら試合構成を決めてから入る
-      if (!this.isActiveRoom(code)) {
-        const stages = this.createStages.slice(0, this.createSets);
-        const match: MatchConfig = { sets: this.createSets, stages };
-        // 自作ステージは作成者のブラウザにしか無いので、データごとエリアに書いて全員に配る
-        const custom = this.customStages.filter((s) => stages.includes(s.id));
-        if (custom.length > 0) match.custom = Object.fromEntries(custom.map((s) => [s.id, s]));
-        this.net.set(`rooms/${code}/match`, match);
-        this.net.set(`rooms/${code}/first`, 'random' satisfies FirstPick);
-      }
+      // ラウンド数とステージはここでは書かない（エリアに入ったあと、ホストだけがロビーで決める）。
+      // モーダルを開いている間に誰かが同じ住所を開いていたら参加のみ
+      if (!this.isActiveRoom(code)) this.net.set(`rooms/${code}/first`, 'random' satisfies FirstPick);
       this.join(code);
     };
     input.onkeydown = (e) => {
@@ -389,22 +339,36 @@ export class Lobby {
     this.root.querySelector<HTMLButtonElement>('#btn-back')!.onclick = () => this.go('name');
   }
 
-  /** ラウンドごとのステージ選択（エリア作成時）。1行 = 1ラウンド */
-  private setStagesHtml(): string {
+  /** ステージの選択肢（組み込み・同梱・自分の自作ステージ） */
+  private stageOptions(): { id: string; name: string; desc: string }[] {
+    const options = [
+      ...[...STAGES, ...BUNDLED_STAGES].map((st) => ({ id: st.id, name: st.name, desc: st.desc })),
+      ...this.customStages.map((st) => ({
+        id: st.id,
+        name: `🛠 ${st.name}`,
+        desc: `${st.w}×${st.h}マス・カメラ${st.cams.length}台・一般客${st.npcCount}人（自作）`,
+      })),
+    ];
+    // 前のホストが選んだ自作ステージ（自分のブラウザには無い）も、選択中なら選択肢に残す
+    for (const id of this.match.stages) {
+      if (options.some((o) => o.id === id)) continue;
+      const st = getStage(id);
+      if (st.id === id) options.push({ id, name: `🛠 ${st.name}`, desc: st.desc });
+    }
+    return options;
+  }
+
+  /** ラウンドごとのステージ選択（ロビーの「くわしい設定」）。1行 = 1ラウンド。canEdit=false なら表示のみ */
+  private setStagesHtml(canEdit: boolean): string {
+    const options = this.stageOptions();
     const rows: string[] = [];
-    for (let i = 0; i < this.createSets; i++) {
-      const options = [
-        ...[...STAGES, ...BUNDLED_STAGES].map((st) => ({ id: st.id, name: st.name, desc: st.desc })),
-        ...this.customStages.map((st) => ({
-          id: st.id,
-          name: `🛠 ${st.name}`,
-          desc: `${st.w}×${st.h}マス・カメラ${st.cams.length}台・一般客${st.npcCount}人（自作）`,
-        })),
-      ];
+    for (let i = 0; i < this.match.sets; i++) {
       const picks = options
         .map(
           (st) => `
-          <button class="stage-pick ${st.id === this.createStages[i] ? 'selected' : ''}" data-set="${i}" data-stage="${st.id}" title="${esc(st.desc)}">
+          <button class="stage-pick ${st.id === this.match.stages[i] ? 'selected' : ''}" data-set="${i}" data-stage="${esc(st.id)}" title="${esc(st.desc)}" ${
+            canEdit ? '' : 'disabled'
+          }>
             ${esc(st.name)}
           </button>`,
         )
@@ -412,6 +376,24 @@ export class Lobby {
       rows.push(`<div class="set-row"><span class="set-label">${roundLabel(i + 1)}</span><div class="set-picks">${picks}</div></div>`);
     }
     return rows.join('');
+  }
+
+  /**
+   * 試合構成（ラウンド数とステージ）を書き換える。ホストだけが、ロビーの「くわしい設定」から呼ぶ。
+   * 自作ステージは作成者のブラウザにしか無いので、データごとエリアに書いて全員に配る
+   */
+  private setMatch(sets: number, stages: string[]): void {
+    if (!this.room || !this.isHost()) return;
+    const match: MatchConfig = { sets, stages };
+    const custom: Record<string, unknown> = {};
+    for (const id of stages) {
+      const local = this.customStages.find((st) => st.id === id);
+      // 自分のブラウザに無い自作ステージ（前のホストが選んだもの）は、エリアに配られているデータを引き継ぐ
+      if (local) custom[id] = local;
+      else if (id in this.matchCustom) custom[id] = this.matchCustom[id];
+    }
+    if (Object.keys(custom).length > 0) match.custom = custom;
+    this.net.set(`rooms/${this.room}/match`, match);
   }
 
   /** 一覧部分だけを描き直す（入力欄の内容を消さないため） */
@@ -447,6 +429,9 @@ export class Lobby {
     this.room = room;
     this.matchLoaded = false;
     this.disguisedFor = '';
+    this.settingsOpen = false;
+    // ホストになったときにステージ選択へ出す自作ステージ（遊べるものだけ）
+    this.customStages = loadStages().filter((st) => validateStage(st).errors.length === 0);
     const pid = this.net.clientId;
     // 変装（カプセルの色）は選ばずランダム
     this.color = randomColor();
@@ -654,6 +639,29 @@ export class Lobby {
             : filledCount < 4
               ? `${filledCount}人で開始できます（4人未満は動作確認用）`
               : '4人そろいました';
+    // ラウンド数とステージ。変更できるのはホストだけ（試合中は不可）。ほかの人には今の設定を表示するだけ
+    const canEdit = isHost && !busy;
+    const stageNames = [...new Set(this.match.stages.map((id) => getStage(id).name))];
+    const settingsNote = canEdit
+      ? '🛠 は自作ステージ。タイトル画面の「ステージエディタ」で作ったものがここに出ます'
+      : isHost
+        ? '試合中は変更できません'
+        : 'ホストが決めます（あなたは変更できません）';
+    const settingsBody = this.settingsOpen
+      ? `
+            <h3 class="section-title">ラウンド数 <small>1ラウンド = 第1ターン＋第2ターン（攻守交代）</small></h3>
+            <div class="set-options">${CONFIG.setOptions
+              .map(
+                (n) =>
+                  `<button class="seg ${n === this.match.sets ? 'selected' : ''}" data-sets="${n}" ${
+                    canEdit ? '' : 'disabled'
+                  }>${n}</button>`,
+              )
+              .join('')}</div>
+            <h3 class="section-title">ラウンドごとのステージ</h3>
+            <div class="set-stages">${this.setStagesHtml(canEdit)}</div>
+            <p class="lobby-note dim">${settingsNote}</p>`
+      : '';
     const firstOptions: { v: FirstPick; label: string }[] = [
       { v: 'A', label: `${TEAM_NAMES.A} が先にまんびきする` },
       { v: 'B', label: `${TEAM_NAMES.B} が先にまんびきする` },
@@ -682,6 +690,13 @@ export class Lobby {
               .join('')}</div>
             <span class="lobby-note dim">${isHost ? 'ホストが決めます' : 'ホストが決めます（あなたは変更できません）'}</span>
           </div>
+          <div class="create-details room-settings ${this.settingsOpen ? 'open' : ''}">
+            <button class="settings-toggle" id="btn-settings" aria-expanded="${this.settingsOpen}">
+              ${this.settingsOpen ? '▾' : '▸'} くわしい設定 <small>${this.match.sets}ラウンド・${esc(stageNames.join(' / '))}${
+                isHost ? '' : '（ホストが決めます）'
+              }</small>
+            </button>${settingsBody}
+          </div>
         </div>
         <div class="room-footer">
           <div class="room-footer-inner">
@@ -702,7 +717,7 @@ export class Lobby {
           <div class="modal rules">
           <h2>ルールと操作方法</h2>
           <p>🏪 高額商品を盗みたい <b>${SIDE_MICE}</b> VS それを防ぎたい <b>${SIDE_WATCH}</b>。TEAM PINK と TEAM BLUE の2チーム（各2匹）で、攻守を入れ替えながら戦う</p>
-          <p>⏱ 1ターン ${CONFIG.roundTimeSec}秒。第1ターンと第2ターンで攻守を交代し、それを1ラウンドとする（ラウンド数はエリア作成時に決める）。各ターンの前に ${CONFIG.planningSec}秒の作戦会議タイム（棚ごとのポイントが載った店内マップを見ながら相談）</p>
+          <p>⏱ 1ターン ${CONFIG.roundTimeSec}秒。第1ターンと第2ターンで攻守を交代し、それを1ラウンドとする（ラウンド数とステージは、ホストがロビーの「くわしい設定」で決める）。各ターンの前に ${CONFIG.planningSec}秒の作戦会議タイム（棚ごとのポイントが載った店内マップを見ながら相談）</p>
           <p>🐭 ${SIDE_MICE}: 一般客に変装して店内へ（変装の色はランダム。一般客も同じ色のどれか）。WASD or 矢印キーで移動。好きな商品棚の近くで「盗む」ボタンを押し続け、${CONFIG.stealTimeSec}秒とどまると盗み成功（ボタンを離すと中断。その間は目立つ！）。出口から持ち出すとその商品のポイントが確定。ただし店の外に出たらそのターンには戻れない（欲張って盗み続けるか、早めに持ち出すかの駆け引き）</p>
           <p>📹 ${SIDE_WATCH}: 画面左上のカメラマップでカメラ番号をクリック（or 数字キー）して ONLINE⇔OFFLINE 切替（同時 ${CONFIG.maxViewCams}台まで。映像は4分割した画面の残り3区画のモニタに表示）。映像内の怪しいネズミをクリックで「ダウト」（1ターン各 ${CONFIG.doubtsPerRound}回まで）。的中したネズミはポイントを没収されて退場（以降は店内全体を俯瞰で観戦）、一般客なら空振り。ターンは時間切れ、または ${SIDE_MICE} 全員の退場で終了</p>
           <p>💡 ONLINE のカメラは球体が赤く発光し、視野に入っている床が明るくなる（${SIDE_MICE} からも「みられている場所」が分かる）。カメラマップには自分が ON にしたカメラの視野（赤）・相方が ON にしたカメラの視野（青）と死角が表示される（Mキーで表示/非表示）。${SIDE_MICE} は同じマップが左下に常時表示され、自分の位置が分かる。仲間の頭上には名前が出る（監視カメラには映らない）</p>
@@ -727,6 +742,28 @@ export class Lobby {
     this.root.querySelectorAll<HTMLButtonElement>('[data-first]').forEach((b) => {
       b.onclick = () => this.net.set(`rooms/${this.room}/first`, b.dataset.first as FirstPick);
     });
+    this.root.querySelector<HTMLButtonElement>('#btn-settings')!.onclick = () => {
+      this.settingsOpen = !this.settingsOpen;
+      this.render();
+    };
+    if (canEdit) {
+      this.root.querySelectorAll<HTMLButtonElement>('[data-sets]').forEach((b) => {
+        b.onclick = () => {
+          const sets = Number(b.dataset.sets);
+          // 増えた分は直前のラウンドと同じステージで埋める
+          const stages = this.match.stages.slice(0, sets);
+          while (stages.length < sets) stages.push(stages[stages.length - 1] ?? DEFAULT_STAGE_ID);
+          this.setMatch(sets, stages);
+        };
+      });
+      this.root.querySelectorAll<HTMLButtonElement>('.stage-pick').forEach((b) => {
+        b.onclick = () => {
+          const stages = [...this.match.stages];
+          stages[Number(b.dataset.set)] = b.dataset.stage ?? DEFAULT_STAGE_ID;
+          this.setMatch(this.match.sets, stages);
+        };
+      });
+    }
     this.root.querySelector<HTMLButtonElement>('#btn-start')?.addEventListener('click', () => {
       // 前の試合の残骸を消してから開始。まず作戦会議タイム → （main.ts が）第1ターンを開始する。
       // 先攻（第1ターンにまんびきするチーム）はここで確定し、商品配置の seed も作戦会議のマップ用にここで決める
