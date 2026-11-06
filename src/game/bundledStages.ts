@@ -5,6 +5,7 @@
  */
 import cam6 from '../../docs/dorobo-stage-カメラ６_1106.json';
 import cam9 from '../../docs/dorobo-stage-カメラ９_1106.json';
+import cam12 from '../../docs/dorobo-stage-カメラ12_1106.json';
 import { normalizeStageData, toStageDef, validateStage } from './customStage';
 import { registerStage, type StageDef } from './stages';
 
@@ -15,6 +16,7 @@ import { registerStage, type StageDef } from './stages';
 const SOURCES: readonly { id: string; raw: unknown }[] = [
   { id: 'cam6_1106', raw: cam6 },
   { id: 'cam9_1106', raw: cam9 },
+  { id: 'cam12_1106', raw: cam12 },
 ];
 
 function build(): StageDef[] {
