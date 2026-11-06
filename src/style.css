@@ -701,7 +701,15 @@ body,
 }
 .seg-row {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 6px;
+}
+/* .seg はラウンド数の数字ボタン用（左右の余白なし・18px）なので、文章の入る先攻ボタンは余白と文字サイズを指定し直す */
+.seg-row .seg {
+  padding: 10px 16px;
+  font-size: 14px;
+  white-space: nowrap;
 }
 .seg-row .seg:disabled {
   cursor: default;
@@ -1478,7 +1486,7 @@ body,
   pointer-events: none;
 }
 .cctv-cell {
-  /* 位置・サイズは CctvView が毎フレーム描画範囲（cellRect）に合わせて設定する */
+  /* 位置・サイズは CctvView が描画範囲（cellRect。4分割の右上・左下・右下）に合わせて設定する */
   position: absolute;
   box-sizing: border-box;
   border: 2px solid rgba(255, 255, 255, 0.4);
@@ -1504,22 +1512,7 @@ body,
   }
 }
 .cam-map.deny {
-  animation: map-deny 0.35s ease-in-out;
-}
-@keyframes map-deny {
-  0%,
-  100% {
-    transform: translateX(-50%);
-  }
-  25% {
-    transform: translateX(calc(-50% - 4px));
-  }
-  50% {
-    transform: translateX(calc(-50% + 4px));
-  }
-  75% {
-    transform: translateX(calc(-50% - 3px));
-  }
+  animation: btn-deny 0.35s ease-in-out;
 }
 @keyframes btn-deny {
   0%,
@@ -1594,19 +1587,18 @@ body,
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.7);
 }
 
-/* ---- カメラ操作マップ（監視サイド・画面の一番下に常時表示。カメラ番号クリックでON/OFF） ---- */
+/* ---- カメラ操作マップ（監視サイド・4分割の左上の区画に常時表示。カメラ番号クリックでON/OFF） ---- */
 .cam-map {
+  /* 位置・サイズは CamMapView.setBounds が CctvView のレイアウト（左上の区画）に合わせて設定する */
   position: absolute;
-  left: 50%;
-  /* bottom は game.ts の CAM_MAP_BOTTOM_PX と合わせる */
-  bottom: 10px;
-  transform: translateX(-50%);
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
   /* HUD（z-index 5: バナー・ダウト演出・勝敗表示）より下に置く */
   z-index: 4;
-  width: max-content;
   background: rgba(18, 18, 24, 0.92);
   border: 1px solid #444;
-  border-radius: 12px;
+  border-radius: 6px;
   overflow: hidden;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
   pointer-events: auto;
@@ -1639,9 +1631,20 @@ body,
 .cam-map-others {
   color: #5fb3ff;
 }
+/* マップを収める領域。CamMapView がこの大きさを測り、収まる最大の大きさでマップを描く */
+.cam-map-body {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  margin: 0 8px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
 .cam-map canvas {
   display: block;
-  margin: 0 8px 8px;
+  flex: none;
   border-radius: 6px;
 }
 

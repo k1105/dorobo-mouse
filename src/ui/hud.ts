@@ -147,7 +147,7 @@ export class Hud {
     };
   }
 
-  /** 上部バー（役割・タイマー・スコア）の下端のY（CSSピクセル）。CCTVのモニタ配置が上側の余白として使う */
+  /** 上部バー（役割・タイマー・スコア）の下端のY（CSSピクセル）。CCTVの4分割が上側の余白として使う */
   topBarBottom(): number {
     const bar = this.root.querySelector<HTMLDivElement>('.hud-top')!;
     return bar.offsetTop + bar.offsetHeight;

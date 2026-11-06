@@ -2,7 +2,6 @@ import type { MapData } from '../game/world';
 import { castRay } from '../game/world';
 
 /** 1フロアあたりの表示幅（CSSピクセル）。複数フロアは横に並べるので合計幅はフロア数に応じて広がる */
-const CANVAS_W = 480;
 const MINI_W = 240;
 /** 文字サイズ・マーカーの基準スケール（px/m）。スタンダードのマップを480pxで描いたときの値 */
 const BASE_SCALE = 480 / 43.6;
@@ -39,8 +38,10 @@ interface CamOnline {
 
 interface DrawOptions {
   online?: CamOnline;
-  /** 棚ごとの商品名とポイントを描く（作戦会議のマップ用） */
+  /** 棚の文字を売り場ラベルではなくポイントにする（作戦会議のマップ用） */
   prices?: boolean;
+  /** マップの高さの上限（CSSピクセル）。省略時は maxW × MAX_H_RATIO。決まった枠に収めたいとき（監視サイドの区画）に渡す */
+  maxH?: number;
 }
 
 /** 作戦会議のマップの1フロアあたりの表示幅（CSSピクセル） */
@@ -51,7 +52,7 @@ const STRATEGY_W = 720;
  * 視野は棚・壁で遮蔽された実効範囲を2Dレイキャストで求めて扇形に描く。塗られていない床が「死角」。
  * online を渡すと、自分がオンラインにしたカメラを赤、相方がオンラインにしたカメラを青の視野で描き、
  * 誰もオンにしていないカメラは薄い輪郭のみにする（監視サイドの操作用）。
- * prices を付けると棚に商品名とポイントも描く（作戦会議用）。
+ * prices を付けると棚の文字がポイントだけになる（作戦会議用。商品名・売り場ラベルは出さない）。
  */
 export function drawMap(
   canvas: HTMLCanvasElement,
@@ -59,7 +60,7 @@ export function drawMap(
   maxW: number,
   opts: DrawOptions = {},
 ): MapCanvas {
-  const { online, prices } = opts;
+  const { online, prices, maxH } = opts;
   const pad = 0.8;
   const floors = data.floors;
   // フロアを横に並べる。各フロアの枠の左端（ワールド単位のオフセット）
@@ -72,7 +73,7 @@ export function drawMap(
     worldW += f.rect.maxX - f.rect.minX + pad * 2;
     worldH = Math.max(worldH, f.rect.maxZ - f.rect.minZ + pad * 2);
   });
-  const scale = Math.min(maxW / worldW, (maxW * MAX_H_RATIO) / worldH);
+  const scale = Math.min(maxW / worldW, (maxH ?? maxW * MAX_H_RATIO) / worldH);
   const cssW = Math.round(worldW * scale);
   const cssH = Math.round(worldH * scale);
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -187,7 +188,7 @@ export function drawMap(
       }
     }
 
-    // 棚（料金帯ごとに色分け + 売り場ラベル。作戦会議では商品名とポイントも）
+    // 棚（料金帯ごとに色分け + 売り場ラベル。作戦会議ではラベルの代わりにポイントだけ）
     for (const s of floor.shelves) {
       const w = (s.rect.maxX - s.rect.minX) * scale;
       const h = (s.rect.maxZ - s.rect.minZ) * scale;
@@ -200,21 +201,11 @@ export function drawMap(
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const long = Math.max(w, h);
-      // 棚の長辺に沿って文字を描く。prices のときは「商品名 Npt」を主役にし、売り場ラベルは小さく添える
-      const main = prices ? `${s.item.name} ${s.item.price}pt` : s.label;
-      const sub = prices && s.label ? s.label : '';
+      // 棚の長辺に沿って文字を描く。prices のときはポイントだけ（商品名・売り場ラベルは出さない）
       ctx.save();
       ctx.translate(x + w / 2, y + h / 2);
       if (w < h) ctx.rotate(-Math.PI / 2);
-      if (sub) {
-        ctx.font = `bold ${fs(9)}px sans-serif`;
-        ctx.fillText(main, 0, -fs(5), long - 2);
-        ctx.font = `${fs(7)}px sans-serif`;
-        ctx.fillStyle = 'rgba(28, 28, 34, 0.75)';
-        ctx.fillText(sub, 0, fs(5), long - 2);
-      } else {
-        ctx.fillText(main, 0, 0, long - 2);
-      }
+      ctx.fillText(prices ? `${s.item.price}pt` : s.label, 0, 0, long - 2);
       ctx.restore();
     }
 
@@ -281,19 +272,25 @@ export function drawMap(
 const CAM_HIT_R = 20;
 
 /**
- * 監視サイド用のカメラ操作マップ。CCTV画面の一番下に常時表示し、
+ * 監視サイド用のカメラ操作マップ。4分割したCCTV画面の左上の区画に常時表示し（範囲は setBounds で受け取る）、
+ * マップは区画に収まる最大の大きさで描く。
  * マップ上のカメラ番号をクリックするとそのカメラをオンライン⇔オフラインする。
  * 自分がオンにしたカメラは赤い視野、相方（もう1人の監視サイド）がオンにしたカメラは青い視野、オフラインは灰色。
  * Mキーで表示/非表示。
  */
 export class CamMapView {
   private root: HTMLDivElement;
+  /** マップを収める領域（パネルから見出しと余白を除いた部分） */
+  private body: HTMLDivElement;
   private canvas: HTMLCanvasElement;
   private status: HTMLSpanElement;
   private data: MapData;
   private map: MapCanvas;
   private online = new Set<number>();
   private others = new Set<number>();
+  /** マップを描いたときの body の大きさ（CSSピクセル）。setBounds で区画が決まるまでは仮の大きさ */
+  private fitW = 480;
+  private fitH = 360;
 
   constructor(parent: HTMLElement, data: MapData, onCamClick: (camId: number) => void) {
     this.data = data;
@@ -306,8 +303,11 @@ export class CamMapView {
       </div>
     `;
     this.status = this.root.querySelector<HTMLSpanElement>('.cam-map-status')!;
+    this.body = document.createElement('div');
+    this.body.className = 'cam-map-body';
     this.canvas = document.createElement('canvas');
-    this.root.appendChild(this.canvas);
+    this.body.appendChild(this.canvas);
+    this.root.appendChild(this.body);
     parent.appendChild(this.root);
     this.map = this.redraw();
 
@@ -322,14 +322,30 @@ export class CamMapView {
   }
 
   private redraw(): MapCanvas {
-    return drawMap(this.canvas, this.data, widthFor(CANVAS_W, this.data.floors.length), {
+    return drawMap(this.canvas, this.data, this.fitW, {
       online: { mine: this.online, others: this.others },
+      maxH: this.fitH,
     });
   }
 
-  /** パネルの表示高さ（CSSピクセル）。非表示なら0。CCTVのモニタ配置が下側の余白として使う */
-  panelHeight(): number {
-    return this.root.offsetHeight;
+  /** パネルを置く範囲（4分割の左上の区画。親要素内のCSSピクセル）を設定し、マップをその中に収まる大きさで描き直す */
+  setBounds(rect: { x: number; y: number; w: number; h: number }): void {
+    this.root.style.left = `${rect.x}px`;
+    this.root.style.top = `${rect.y}px`;
+    this.root.style.width = `${rect.w}px`;
+    this.root.style.height = `${rect.h}px`;
+    this.fit();
+  }
+
+  /** body の大きさが変わっていたらマップを描き直す。非表示中は測れないので、表示に戻したときに合わせる */
+  private fit(): void {
+    const w = this.body.clientWidth;
+    const h = this.body.clientHeight;
+    if (w <= 0 || h <= 0) return;
+    if (w === this.fitW && h === this.fitH) return;
+    this.fitW = w;
+    this.fitH = h;
+    this.map = this.redraw();
   }
 
   /** 自分がオンラインにしているカメラID一覧を反映して描き直す */
@@ -382,11 +398,13 @@ export class CamMapView {
 
   toggle(): void {
     this.root.classList.toggle('hidden');
+    this.fit();
   }
 
   /** ステージ紹介中など、Mキーの表示状態とは別にパネルごと隠す */
   setVisible(visible: boolean): void {
     this.root.classList.toggle('intro-hidden', !visible);
+    this.fit();
   }
 
   dispose(): void {
@@ -463,7 +481,7 @@ export class MiniMapView {
 }
 
 /**
- * 作戦会議タイムのマップ。店内の俯瞰に、棚ごとの商品名とポイント、全カメラの視野（遮蔽込み）を描く。
+ * 作戦会議タイムのマップ。店内の俯瞰に、棚ごとのポイント、全カメラの視野（遮蔽込み）を描く。
  * 両チームが同じ図を見ながら、どこを狙うか／どこを見張るかを相談する
  */
 export class StrategyMapView {

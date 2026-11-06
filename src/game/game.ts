@@ -27,8 +27,6 @@ import {
 } from './world';
 import { getStage, type StageDef } from './stages';
 
-/** カメラマップの画面下端からの余白（style.css の .cam-map の bottom と合わせる） */
-const CAM_MAP_BOTTOM_PX = 10;
 import { Hud, type NextChoice } from '../ui/hud';
 
 /** フィールドインサートのカメラカット（from→to へスイープしながら lookFrom→lookTo を注視する） */
@@ -280,7 +278,7 @@ export class Game {
       this.hud.banner(`${this.progressLabel()}：あなたは ${sideLabel(this.amMouse)}です`, 'info');
     }
 
-    // 監視サイドはCCTVビュー（同時オンライン3台まで）と、カメラをクリックでオン/オフする操作マップ（画面下に常時表示、Mで表示切替）
+    // 監視サイドは画面を4分割し、左上にカメラをクリックでオン/オフする操作マップ（Mで表示切替）、残り3区画にCCTVビュー（同時オンライン3台まで）を並べる
     if (this.amCat) {
       const cctv = new CctvView(container, this.world.cctvCams.length);
       this.cctv = cctv;
@@ -294,11 +292,9 @@ export class Game {
         this.publishCams();
       };
       cctv.onChange = syncCams;
-      // モニタは画面上端のHUDバーと画面下端のカメラマップの間の中央に並べる
-      cctv.getReserved = () => ({
-        top: this.hud.topBarBottom(),
-        bottom: camMap.panelHeight() + CAM_MAP_BOTTOM_PX,
-      });
+      // 4分割は画面上端のHUDバーの下に置き、左上の区画にカメラマップを収める
+      cctv.getTop = () => this.hud.topBarBottom();
+      cctv.onLayout = (rect) => camMap.setBounds(rect);
       cctv.onDeny = () => {
         camMap.deny();
         this.hud.banner(
@@ -873,8 +869,6 @@ export class Game {
   private onKey(code: string): void {
     if (code === 'KeyM' && this.camMap) {
       this.camMap.toggle();
-      // マップの表示/非表示でモニタを置ける帯の高さが変わる
-      this.cctv?.relayout();
       return;
     }
     if (code === 'KeyF' && !this.myMesh && !this.amCat && this.multiFloor()) {
