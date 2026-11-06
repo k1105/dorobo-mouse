@@ -66,7 +66,7 @@ export interface RampDef {
 export type StageId = 'standard' | 'simple' | 'twofloor';
 
 export interface StageDef {
-  /** 組み込みは StageId。ステージエディタ製は 'c_' で始まるID */
+  /** 組み込みは StageId。同梱ステージ（bundledStages.ts）はそこで決めたID。ステージエディタ製は 'c_' で始まるID */
   id: string;
   name: string;
   desc: string;
@@ -300,7 +300,7 @@ export const STAGES: readonly StageDef[] = [STANDARD, SIMPLE, TWOFLOOR];
 
 export const DEFAULT_STAGE_ID: StageId = 'standard';
 
-/** ステージエディタ製のステージ。ルームの試合構成（match.custom）やテストプレイから登録される */
+/** ステージエディタ製のステージ。同梱ステージ（bundledStages.ts）・ルームの試合構成（match.custom）・テストプレイから登録される */
 const customStages = new Map<string, StageDef>();
 
 /** ステージエディタ製のステージを登録する（同じIDは上書き） */

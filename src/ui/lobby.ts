@@ -4,6 +4,7 @@ import type { FirstPick, LogMeta, MatchConfig, PhaseState, PlayerInfo, Role, Tea
 import { isMouseInRound, isStalePhase, rolesOfTeam, TEAM_LABELS, TEAM_NAMES, teamOf } from '../types';
 import { AVATAR_PALETTE, CONFIG } from '../config';
 import { DEFAULT_STAGE_ID, getStage, STAGES } from '../game/stages';
+import { BUNDLED_STAGES } from '../game/bundledStages';
 import { loadStages, registerCustomStage, validateStage, type CustomStageData } from '../game/customStage';
 import { buildWorld, type MapData } from '../game/world';
 import { CostumePreview, type CostumeMember } from './costume';
@@ -257,7 +258,7 @@ export class Lobby {
     this.destroyPreview();
     // エディタで作り直されている・消されていることがあるので、表示のたびに読み直す
     this.customStages = loadStages().filter((s) => validateStage(s).errors.length === 0);
-    const known = new Set([...STAGES.map((s) => s.id), ...this.customStages.map((s) => s.id)]);
+    const known = new Set([...STAGES, ...BUNDLED_STAGES, ...this.customStages].map((s) => s.id));
     this.createStages = this.createStages.map((id) => (known.has(id) ? id : DEFAULT_STAGE_ID));
     this.root.innerHTML = `
       <div class="scr">
@@ -393,7 +394,7 @@ export class Lobby {
     const rows: string[] = [];
     for (let i = 0; i < this.createSets; i++) {
       const options = [
-        ...STAGES.map((st) => ({ id: st.id, name: st.name, desc: st.desc })),
+        ...[...STAGES, ...BUNDLED_STAGES].map((st) => ({ id: st.id, name: st.name, desc: st.desc })),
         ...this.customStages.map((st) => ({
           id: st.id,
           name: `🛠 ${st.name}`,
